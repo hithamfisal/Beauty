@@ -1,0 +1,43 @@
+# Dependencies
+node_modules/
+.pnp/
+.pnp.js
+
+# Environment files
+.env
+.env.*
+!.env.example
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Builds
+backend/dist/
+admin-dashboard/dist/
+mobile-app/build/
+
+# Flutter / Dart
+mobile-app/.dart_tool/
+mobile-app/.flutter-plugins
+mobile-app/.flutter-plugins-dependencies
+mobile-app/.packages
+mobile-app/**/Generated.xcconfig
+mobile-app/**/flutter_export_environment.sh
+mobile-app/android/local.properties
+mobile-app/android/.gradle/
+mobile-app/ios/Pods/
+mobile-app/macos/Pods/
+
+# IDE / OS
+.vscode/
+.idea/
+*.iml
+.DS_Store
+Thumbs.db
+
+# Temporary
+.tmp/
+tmp/
