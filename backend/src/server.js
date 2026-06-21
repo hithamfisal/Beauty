@@ -281,9 +281,104 @@ async function ensureV16Schema() {
   await query(`CREATE INDEX IF NOT EXISTS idx_reviews_beautician ON beautician_reviews(beautician_id)`);
 }
 
+
+async function ensureV17V18Schema() {
+  await query(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS contact_preference VARCHAR(40)`);
+  await query(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS alternate_time VARCHAR(80)`);
+  await query(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS whatsapp_status VARCHAR(40) DEFAULT 'not_sent'`);
+
+  await query(`
+    CREATE TABLE IF NOT EXISTS booking_events (
+      id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+      booking_id UUID REFERENCES bookings(id) ON DELETE CASCADE,
+      event_type VARCHAR(80) NOT NULL DEFAULT 'note',
+      title VARCHAR(180),
+      description TEXT,
+      actor_type VARCHAR(40) DEFAULT 'system',
+      actor_name VARCHAR(160),
+      metadata JSONB,
+      created_at TIMESTAMP DEFAULT NOW()
+    )
+  `);
+  await query(`CREATE INDEX IF NOT EXISTS idx_booking_events_booking ON booking_events(booking_id)`);
+
+  await query(`
+    CREATE TABLE IF NOT EXISTS communication_templates (
+      id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+      code VARCHAR(80) UNIQUE,
+      title_ar VARCHAR(180) NOT NULL,
+      body_ar TEXT NOT NULL,
+      channel VARCHAR(40) DEFAULT 'whatsapp',
+      status VARCHAR(20) DEFAULT 'active',
+      sort_order INT DEFAULT 0,
+      created_at TIMESTAMP DEFAULT NOW(),
+      updated_at TIMESTAMP DEFAULT NOW()
+    )
+  `);
+
+  const templateCount = await query(`SELECT COUNT(*)::int AS count FROM communication_templates`);
+  if (templateCount.rows[0].count === 0) {
+    const templates = [
+      ['new_request', 'رسالة طلب جديد', 'مرحباً {customer_name}، تم استلام طلبك في Beauty Home Service وسيتم التواصل معك لتأكيد الموعد. رقم الطلب: {booking_id}', 1],
+      ['confirm_booking', 'تأكيد الحجز', 'مرحباً {customer_name}، تم تأكيد حجزك لخدمة {service_name} بتاريخ {booking_date} الساعة {booking_time}.', 2],
+      ['payment_reminder', 'تذكير الدفع', 'مرحباً {customer_name}، نذكرك بحالة الدفع لطلبك رقم {booking_id}. حالة الدفع الحالية: {payment_status}.', 3],
+      ['completed_review', 'طلب التقييم', 'مرحباً {customer_name}، سعدنا بخدمتك. يمكنك فتح التطبيق وتقييم خبيرة التجميل للطلب رقم {booking_id}.', 4]
+    ];
+    for (const t of templates) {
+      await query(`INSERT INTO communication_templates (code, title_ar, body_ar, sort_order) VALUES ($1,$2,$3,$4)`, t);
+    }
+  }
+}
+
+async function logBookingEvent(bookingId, eventType, title, description, actorType = 'system', actorName = null, metadata = null) {
+  if (!bookingId) return null;
+  try {
+    const result = await query(
+      `INSERT INTO booking_events (booking_id, event_type, title, description, actor_type, actor_name, metadata)
+       VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *`,
+      [bookingId, eventType || 'note', title || null, description || null, actorType || 'system', actorName, metadata ? JSON.stringify(metadata) : null]
+    );
+    return result.rows[0];
+  } catch (error) {
+    console.error('booking event log failed:', error.message);
+    return null;
+  }
+}
+
+function fillTemplate(templateText, booking) {
+  const values = {
+    booking_id: booking.id,
+    customer_name: booking.customer_name || booking.name || 'عميلتنا',
+    customer_phone: booking.customer_phone || booking.phone || '',
+    service_name: booking.service_name || '',
+    booking_date: booking.booking_date ? String(booking.booking_date).slice(0, 10) : '',
+    booking_time: booking.booking_time ? String(booking.booking_time).slice(0, 5) : '',
+    payment_status: booking.payment_status || 'unpaid',
+    status: booking.status || ''
+  };
+  return String(templateText || '').replace(/\{(\w+)\}/g, (_, key) => values[key] ?? '');
+}
+
+async function uploadToCloudinary(imageDataUrl, folder = 'beauty-home-service') {
+  const cloudName = process.env.CLOUDINARY_CLOUD_NAME;
+  const uploadPreset = process.env.CLOUDINARY_UPLOAD_PRESET;
+  if (!cloudName || !uploadPreset) return { url: imageDataUrl, provider: 'inline-data-url' };
+  const form = new FormData();
+  form.append('file', imageDataUrl);
+  form.append('upload_preset', uploadPreset);
+  form.append('folder', folder);
+  const response = await fetch(`https://api.cloudinary.com/v1_1/${cloudName}/image/upload`, { method: 'POST', body: form });
+  const text = await response.text();
+  let data;
+  try { data = JSON.parse(text); } catch { data = { error: text }; }
+  if (!response.ok) throw new Error(data?.error?.message || data?.error || 'Cloudinary upload failed');
+  return { url: data.secure_url || data.url, provider: 'cloudinary', public_id: data.public_id };
+}
+
 async function initSchemas() {
   await ensureV14Schema();
   await ensureV16Schema();
+  await ensureV17V18Schema();
 }
 
 initSchemas().catch(error => console.error('schema init failed:', error));
@@ -378,7 +473,7 @@ app.post('/api/admin/login', async (req, res) => {
 });
 
 app.get(['/api/health', '/health'], (req, res) => {
-  res.json({ ok: true, app: 'Beauty Home Service API', version: 'v1.6' });
+  res.json({ ok: true, app: 'Beauty Home Service API', version: 'v1.8' });
 });
 
 app.get('/api/regions', async (req, res) => {
@@ -464,17 +559,19 @@ app.post('/api/bookings', async (req, res) => {
       INSERT INTO bookings (
         customer_id, region_id, city_id, district_id, service_category_id, event_type, service_id,
         booking_date, booking_time, people_count, address, latitude, longitude, design_image_url,
-        customer_notes, preferred_artist_id, status, payment_status
+        customer_notes, preferred_artist_id, contact_preference, alternate_time, status, payment_status
       )
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,'new','unpaid')
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,'new','unpaid')
       RETURNING *
     `, [
       customerId, regionId, cityId, districtId, serviceCategoryId, nullable(b.event_type), serviceId,
       b.booking_date, b.booking_time, b.people_count || 1, nullable(b.address), b.latitude || null, b.longitude || null,
-      b.design_image_url || null, nullable(b.customer_notes), preferredArtistId
+      b.design_image_url || null, nullable(b.customer_notes), preferredArtistId,
+      nullable(b.contact_preference) || 'whatsapp', nullable(b.alternate_time)
     ]);
 
     await query(`INSERT INTO booking_status_history (booking_id, new_status, changed_by, note) VALUES ($1,'new','customer','تم إنشاء الطلب')`, [result.rows[0].id]);
+    await logBookingEvent(result.rows[0].id, 'created', 'تم إنشاء الطلب', 'تم إنشاء الطلب من تطبيق العميلة', 'customer');
     res.status(201).json(result.rows[0]);
   } catch (error) {
     console.error('Create booking error:', error);
@@ -544,6 +641,7 @@ app.patch('/api/admin/bookings/:id/status', async (req, res) => {
     if (!current.rows[0]) return res.status(404).json({ error: 'Booking not found' });
     const result = await query(`UPDATE bookings SET status=$1, admin_notes=COALESCE($2,admin_notes), updated_at=NOW() WHERE id=$3 RETURNING *`, [req.body.status, req.body.admin_notes || null, req.params.id]);
     await query(`INSERT INTO booking_status_history (booking_id, old_status, new_status, changed_by, note) VALUES ($1,$2,$3,'admin',$4)`, [req.params.id, current.rows[0].status, req.body.status, nullable(req.body.note)]);
+    await logBookingEvent(req.params.id, 'status_changed', 'تم تغيير حالة الطلب', `${current.rows[0].status} → ${req.body.status}`, 'admin', req.admin?.email || null);
     res.json(result.rows[0]);
   } catch (error) { res.status(500).json({ error: 'Failed to update booking status', details: error.message }); }
 });
@@ -569,6 +667,7 @@ app.patch('/api/admin/bookings/:id/payment', async (req, res) => {
     const result = await query(`UPDATE bookings SET payment_status=$1, updated_at=NOW() WHERE id=$2 RETURNING *`, [paymentStatus, req.params.id]);
     if (!result.rows[0]) return res.status(404).json({ error: 'Booking not found' });
     await query(`INSERT INTO booking_status_history (booking_id, old_status, new_status, changed_by, note) VALUES ($1,$2,$2,'admin',$3)`, [req.params.id, result.rows[0].status, `تم تحديث حالة الدفع إلى ${paymentStatus}`]);
+    await logBookingEvent(req.params.id, 'payment_updated', 'تم تحديث حالة الدفع', `حالة الدفع: ${paymentStatus}`, 'admin', req.admin?.email || null);
     res.json(result.rows[0]);
   } catch (error) { res.status(500).json({ error: 'Failed to update payment status', details: error.message }); }
 });
@@ -594,6 +693,7 @@ app.patch('/api/admin/bookings/:id/assign-artist', async (req, res) => {
     const status = artist_id ? 'artist_assigned' : current.rows[0].status;
     const result = await query(`UPDATE bookings SET assigned_artist_id=$1, status=$2, updated_at=NOW() WHERE id=$3 RETURNING *`, [artist_id || null, status, req.params.id]);
     await query(`INSERT INTO booking_status_history (booking_id, old_status, new_status, changed_by, note) VALUES ($1,$2,$3,'admin',$4)`, [req.params.id, current.rows[0].status, status, artist_id ? 'تم تعيين خبيرة التجميل' : 'تم إلغاء تعيين خبيرة التجميل']);
+    await logBookingEvent(req.params.id, 'beautician_assigned', artist_id ? 'تم تعيين خبيرة التجميل' : 'تم إلغاء تعيين الخبيرة', artist_id || '', 'admin', req.admin?.email || null);
     res.json(result.rows[0]);
   } catch (error) { res.status(500).json({ error: 'Failed to assign beautician', details: error.message }); }
 });
@@ -1139,6 +1239,97 @@ app.post('/api/customer/reviews', async (req, res) => {
   } catch (error) { res.status(500).json({ error: 'Failed to save review', details: error.message }); }
 });
 
+
+app.get('/api/admin/notifications', async (req, res) => {
+  try {
+    const newBookings = await query(`SELECT COUNT(*)::int AS count FROM bookings WHERE status='new'`);
+    const unassigned = await query(`SELECT COUNT(*)::int AS count FROM bookings WHERE assigned_artist_id IS NULL AND status NOT IN ('completed','cancelled','unavailable')`);
+    const unpaid = await query(`SELECT COUNT(*)::int AS count FROM bookings WHERE COALESCE(payment_status,'unpaid') <> 'paid' AND status NOT IN ('completed','cancelled','unavailable')`);
+    const today = await query(`SELECT COUNT(*)::int AS count FROM bookings WHERE booking_date=CURRENT_DATE AND status NOT IN ('completed','cancelled','unavailable')`);
+    const recent = await bookingsQuery(`WHERE b.status='new' OR b.assigned_artist_id IS NULL OR b.booking_date=CURRENT_DATE`, []);
+    res.json({
+      counts: { new_bookings: newBookings.rows[0].count, unassigned_bookings: unassigned.rows[0].count, unpaid_bookings: unpaid.rows[0].count, today_bookings: today.rows[0].count },
+      items: recent.rows.slice(0, 20)
+    });
+  } catch (error) { res.status(500).json({ error: 'Failed to load notifications', details: error.message }); }
+});
+
+app.get('/api/admin/bookings/:id/events', async (req, res) => {
+  try {
+    const result = await query(`SELECT * FROM booking_events WHERE booking_id=$1 ORDER BY created_at DESC`, [req.params.id]);
+    res.json(result.rows);
+  } catch (error) { res.status(500).json({ error: 'Failed to load booking events', details: error.message }); }
+});
+
+app.post('/api/admin/bookings/:id/events', async (req, res) => {
+  try {
+    const event = await logBookingEvent(req.params.id, req.body.event_type || 'note', req.body.title || 'ملاحظة إدارية', req.body.description || req.body.note || '', 'admin', req.admin?.email || null, req.body.metadata || null);
+    res.status(201).json(event);
+  } catch (error) { res.status(500).json({ error: 'Failed to add booking event', details: error.message }); }
+});
+
+app.get('/api/admin/communication-templates', async (req, res) => {
+  try { const result = await query(`SELECT * FROM communication_templates ORDER BY sort_order, created_at`); res.json(result.rows); }
+  catch (error) { res.status(500).json({ error: 'Failed to load communication templates', details: error.message }); }
+});
+
+app.post('/api/admin/communication-templates', async (req, res) => {
+  try {
+    const t = req.body;
+    const result = await query(`INSERT INTO communication_templates (code, title_ar, body_ar, channel, status, sort_order) VALUES ($1,$2,$3,$4,$5,$6) RETURNING *`, [t.code || null, t.title_ar, t.body_ar, t.channel || 'whatsapp', t.status || 'active', t.sort_order || 0]);
+    res.status(201).json(result.rows[0]);
+  } catch (error) { res.status(500).json({ error: 'Failed to create communication template', details: error.message }); }
+});
+
+app.patch('/api/admin/communication-templates/:id', async (req, res) => {
+  try {
+    const allowed = ['code','title_ar','body_ar','channel','status','sort_order'];
+    const cols = allowed.filter(f => req.body[f] !== undefined);
+    if (!cols.length) return res.status(400).json({ error: 'No fields sent' });
+    const sets = cols.map((f,i)=>`${f}=$${i+1}`).join(', ');
+    const values = cols.map(f => req.body[f] === '' ? null : req.body[f]);
+    const result = await query(`UPDATE communication_templates SET ${sets}, updated_at=NOW() WHERE id=$${values.length+1} RETURNING *`, [...values, req.params.id]);
+    if (!result.rows[0]) return res.status(404).json({ error: 'Template not found' });
+    res.json(result.rows[0]);
+  } catch (error) { res.status(500).json({ error: 'Failed to update communication template', details: error.message }); }
+});
+
+app.delete('/api/admin/communication-templates/:id', async (req, res) => {
+  try { await query(`DELETE FROM communication_templates WHERE id=$1`, [req.params.id]); res.json({ ok: true, deleted_id: req.params.id }); }
+  catch (error) { res.status(500).json({ error: 'Failed to delete communication template', details: error.message }); }
+});
+
+app.post('/api/admin/bookings/:id/whatsapp', async (req, res) => {
+  try {
+    const bookingRes = await bookingsQuery(`WHERE b.id=$1`, [req.params.id]);
+    const booking = bookingRes.rows[0];
+    if (!booking) return res.status(404).json({ error: 'Booking not found' });
+    let body = req.body.message || '';
+    if (req.body.template_id) {
+      const t = await query(`SELECT * FROM communication_templates WHERE id=$1 LIMIT 1`, [req.body.template_id]);
+      body = fillTemplate(t.rows[0]?.body_ar || body, booking);
+    }
+    if (!body) body = fillTemplate('مرحباً {customer_name}، بخصوص طلبك رقم {booking_id} في Beauty Home Service.', booking);
+    const phone = String(booking.customer_phone || '').replace(/[^0-9+]/g, '');
+    const intl = phone.startsWith('0') ? `966${phone.slice(1)}` : phone.replace(/^\+/, '');
+    const url = `https://wa.me/${intl}?text=${encodeURIComponent(body)}`;
+    await query(`UPDATE bookings SET whatsapp_status='prepared', updated_at=NOW() WHERE id=$1`, [req.params.id]);
+    await logBookingEvent(req.params.id, 'whatsapp_prepared', 'تم تجهيز رسالة واتساب', body, 'admin', req.admin?.email || null, { template_id: req.body.template_id || null });
+    res.json({ ok: true, url, message: body });
+  } catch (error) { res.status(500).json({ error: 'Failed to prepare WhatsApp message', details: error.message }); }
+});
+
+app.get('/api/customer/bookings/:id/events', async (req, res) => {
+  try {
+    const phone = normalizePhone(req.query.phone);
+    if (!phone) return res.status(400).json({ error: 'phone is required' });
+    const booking = await bookingsQuery(`WHERE b.id=$1 AND c.phone=$2`, [req.params.id, phone]);
+    if (!booking.rows[0]) return res.status(404).json({ error: 'Booking not found' });
+    const result = await query(`SELECT event_type, title, description, created_at FROM booking_events WHERE booking_id=$1 ORDER BY created_at ASC`, [req.params.id]);
+    res.json(result.rows);
+  } catch (error) { res.status(500).json({ error: 'Failed to load booking events', details: error.message }); }
+});
+
 app.get('/api/customer/bookings', async (req, res) => {
   try {
     const phone = normalizePhone(req.query.phone);
@@ -1172,9 +1363,25 @@ app.post('/api/auth/verify-otp', async (req, res) => {
 });
 
 app.post('/api/uploads/design-image', async (req, res) => {
-  const { image_data_url } = req.body;
-  if (!image_data_url || typeof image_data_url !== 'string') return res.status(400).json({ error: 'image_data_url is required.' });
-  res.json({ ok: true, url: image_data_url });
+  try {
+    const { image_data_url, folder } = req.body;
+    if (!image_data_url || typeof image_data_url !== 'string') return res.status(400).json({ error: 'image_data_url is required.' });
+    const uploaded = await uploadToCloudinary(image_data_url, folder || 'beauty-home-service/designs');
+    res.json({ ok: true, ...uploaded });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to upload image', details: error.message });
+  }
+});
+
+app.post('/api/admin/uploads/image', async (req, res) => {
+  try {
+    const { image_data_url, folder } = req.body;
+    if (!image_data_url || typeof image_data_url !== 'string') return res.status(400).json({ error: 'image_data_url is required.' });
+    const uploaded = await uploadToCloudinary(image_data_url, folder || 'beauty-home-service/admin');
+    res.json({ ok: true, ...uploaded });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to upload image', details: error.message });
+  }
 });
 
 app.get('/api/admin/artist-availability', async (req, res) => {
