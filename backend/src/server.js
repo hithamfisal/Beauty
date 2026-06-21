@@ -743,14 +743,14 @@ app.patch('/api/admin/bookings/:id/status', async (req, res) => {
 
     const result = await query(`
       UPDATE bookings SET
-        status=$1,
-        admin_notes=COALESCE($2,admin_notes),
+        status=$1::varchar,
+        admin_notes=COALESCE($2::text,admin_notes),
         last_status_change_at=NOW(),
-        confirmed_at=CASE WHEN $1='confirmed' THEN COALESCE(confirmed_at,NOW()) ELSE confirmed_at END,
-        completed_at=CASE WHEN $1='completed' THEN COALESCE(completed_at,NOW()) ELSE completed_at END,
-        cancelled_at=CASE WHEN $1='cancelled' THEN COALESCE(cancelled_at,NOW()) ELSE cancelled_at END,
+        confirmed_at=CASE WHEN $1::text='confirmed' THEN COALESCE(confirmed_at,NOW()) ELSE confirmed_at END,
+        completed_at=CASE WHEN $1::text='completed' THEN COALESCE(completed_at,NOW()) ELSE completed_at END,
+        cancelled_at=CASE WHEN $1::text='cancelled' THEN COALESCE(cancelled_at,NOW()) ELSE cancelled_at END,
         updated_at=NOW()
-      WHERE id=$3 RETURNING *
+      WHERE id=$3::uuid RETURNING *
     `, [requestedStatus, req.body.admin_notes || null, req.params.id]);
 
     if (current.rows[0].status !== requestedStatus) {
@@ -784,7 +784,7 @@ app.patch('/api/admin/bookings/:id/payment', async (req, res) => {
     const allowed = ['unpaid', 'deposit_paid', 'paid', 'refunded'];
     const paymentStatus = req.body.payment_status || 'unpaid';
     if (!allowed.includes(paymentStatus)) return res.status(400).json({ error: 'Invalid payment status' });
-    const result = await query(`UPDATE bookings SET payment_status=$1, paid_at=CASE WHEN $1='paid' THEN COALESCE(paid_at,NOW()) ELSE paid_at END, updated_at=NOW() WHERE id=$2 RETURNING *`, [paymentStatus, req.params.id]);
+    const result = await query(`UPDATE bookings SET payment_status=$1::varchar, paid_at=CASE WHEN $1::text='paid' THEN COALESCE(paid_at,NOW()) ELSE paid_at END, updated_at=NOW() WHERE id=$2::uuid RETURNING *`, [paymentStatus, req.params.id]);
     if (!result.rows[0]) return res.status(404).json({ error: 'Booking not found' });
     await query(`INSERT INTO booking_status_history (booking_id, old_status, new_status, changed_by, note) VALUES ($1,$2,$2,'admin',$3)`, [req.params.id, result.rows[0].status, `تم تحديث حالة الدفع إلى ${paymentStatus}`]);
     await logBookingEvent(req.params.id, 'payment_updated', 'تم تحديث حالة الدفع', `حالة الدفع: ${paymentStatus}`, 'admin', req.admin?.email || null);
@@ -848,7 +848,7 @@ app.patch('/api/admin/bookings/:id/assign-artist', async (req, res) => {
       if (conflicts.rows.length) return res.status(409).json({ error: 'يوجد تعارض في جدول خبيرة التجميل لنفس اليوم.', conflict_count: conflicts.rows.length, conflicts: conflicts.rows });
     }
     const newStatus = artist_id ? 'beautician_assigned' : (normalizeBookingStatus(current.rows[0].status) || 'under_review');
-    const result = await query(`UPDATE bookings SET assigned_artist_id=$1, status=$2, last_status_change_at=NOW(), updated_at=NOW() WHERE id=$3 RETURNING *`, [artist_id || null, newStatus, req.params.id]);
+    const result = await query(`UPDATE bookings SET assigned_artist_id=$1::uuid, status=$2::varchar, last_status_change_at=NOW(), updated_at=NOW() WHERE id=$3::uuid RETURNING *`, [artist_id || null, newStatus, req.params.id]);
     await query(`INSERT INTO booking_status_history (booking_id, old_status, new_status, changed_by, note) VALUES ($1,$2,$3,'admin',$4)`, [req.params.id, current.rows[0].status, newStatus, artist_id ? 'تم تعيين خبيرة التجميل' : 'تم إلغاء تعيين خبيرة التجميل']);
     await logBookingEvent(req.params.id, 'beautician_assigned', artist_id ? 'تم تعيين خبيرة التجميل' : 'تم إلغاء تعيين الخبيرة', artist_id || '', 'admin', req.admin?.email || null);
     res.json(result.rows[0]);
