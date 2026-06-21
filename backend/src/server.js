@@ -237,7 +237,57 @@ async function ensureV14Schema() {
   }
 }
 
-ensureV14Schema().catch(error => console.error('v1.4 schema init failed:', error));
+
+async function ensureV16Schema() {
+  await query(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS preferred_artist_id UUID REFERENCES artists(id)`);
+  await query(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS customer_review_rating INT`);
+  await query(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS customer_review_text TEXT`);
+
+  await query(`
+    CREATE TABLE IF NOT EXISTS beautician_portfolio (
+      id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+      beautician_id UUID REFERENCES artists(id) ON DELETE CASCADE,
+      service_category_id UUID REFERENCES service_categories(id) ON DELETE SET NULL,
+      service_id UUID REFERENCES services(id) ON DELETE SET NULL,
+      title_ar VARCHAR(180) NOT NULL,
+      title_en VARCHAR(180),
+      description TEXT,
+      image_url TEXT NOT NULL,
+      is_featured BOOLEAN DEFAULT FALSE,
+      status VARCHAR(20) NOT NULL DEFAULT 'published',
+      sort_order INT DEFAULT 0,
+      created_at TIMESTAMP DEFAULT NOW(),
+      updated_at TIMESTAMP DEFAULT NOW()
+    )
+  `);
+
+  await query(`
+    CREATE TABLE IF NOT EXISTS beautician_reviews (
+      id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+      booking_id UUID REFERENCES bookings(id) ON DELETE CASCADE,
+      beautician_id UUID REFERENCES artists(id) ON DELETE SET NULL,
+      customer_id UUID REFERENCES customers(id) ON DELETE SET NULL,
+      rating INT CHECK (rating BETWEEN 1 AND 5),
+      review_text TEXT,
+      status VARCHAR(20) NOT NULL DEFAULT 'published',
+      created_at TIMESTAMP DEFAULT NOW(),
+      updated_at TIMESTAMP DEFAULT NOW(),
+      UNIQUE(booking_id)
+    )
+  `);
+
+  await query(`CREATE INDEX IF NOT EXISTS idx_portfolio_beautician ON beautician_portfolio(beautician_id)`);
+  await query(`CREATE INDEX IF NOT EXISTS idx_portfolio_service ON beautician_portfolio(service_id)`);
+  await query(`CREATE INDEX IF NOT EXISTS idx_reviews_beautician ON beautician_reviews(beautician_id)`);
+}
+
+async function initSchemas() {
+  await ensureV14Schema();
+  await ensureV16Schema();
+}
+
+initSchemas().catch(error => console.error('schema init failed:', error));
+
 
 async function findOrCreateRegion(regionName) {
   const name = nullable(regionName);
@@ -328,7 +378,7 @@ app.post('/api/admin/login', async (req, res) => {
 });
 
 app.get(['/api/health', '/health'], (req, res) => {
-  res.json({ ok: true, app: 'Beauty Home Service API', version: 'v1.5' });
+  res.json({ ok: true, app: 'Beauty Home Service API', version: 'v1.6' });
 });
 
 app.get('/api/regions', async (req, res) => {
@@ -400,6 +450,7 @@ app.post('/api/bookings', async (req, res) => {
     const serviceId = b.service_id || await findServiceId(b.service_type || b.service_name || b.service);
     const serviceData = serviceId ? await query(`SELECT category_id FROM services WHERE id=$1`, [serviceId]) : { rows: [] };
     const serviceCategoryId = b.service_category_id || serviceData.rows[0]?.category_id || null;
+    const preferredArtistId = b.preferred_artist_id || b.beautician_id || null;
     const customerId = await findOrCreateCustomer({ ...b, region_id: regionId, city_id: cityId, district_id: districtId });
 
     if (!customerId) return res.status(400).json({ error: 'Customer is required. Send customer_id or phone.' });
@@ -413,14 +464,14 @@ app.post('/api/bookings', async (req, res) => {
       INSERT INTO bookings (
         customer_id, region_id, city_id, district_id, service_category_id, event_type, service_id,
         booking_date, booking_time, people_count, address, latitude, longitude, design_image_url,
-        customer_notes, status, payment_status
+        customer_notes, preferred_artist_id, status, payment_status
       )
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,'new','unpaid')
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,'new','unpaid')
       RETURNING *
     `, [
       customerId, regionId, cityId, districtId, serviceCategoryId, nullable(b.event_type), serviceId,
       b.booking_date, b.booking_time, b.people_count || 1, nullable(b.address), b.latitude || null, b.longitude || null,
-      b.design_image_url || null, nullable(b.customer_notes)
+      b.design_image_url || null, nullable(b.customer_notes), preferredArtistId
     ]);
 
     await query(`INSERT INTO booking_status_history (booking_id, new_status, changed_by, note) VALUES ($1,'new','customer','تم إنشاء الطلب')`, [result.rows[0].id]);
@@ -456,7 +507,7 @@ async function bookingsQuery(where = '', params = []) {
     SELECT b.*, c.name AS customer_name, c.phone AS customer_phone,
       r.name_ar AS region_name, city.name_ar AS city_name, d.name_ar AS district_name,
       sc.name_ar AS service_category_name, COALESCE(s.name_ar, s.name) AS service_name,
-      a.name AS artist_name, a.phone AS artist_phone
+      a.name AS artist_name, a.phone AS artist_phone, pa.name AS preferred_artist_name, pa.phone AS preferred_artist_phone
     FROM bookings b
     LEFT JOIN customers c ON c.id=b.customer_id
     LEFT JOIN regions r ON r.id=b.region_id
@@ -465,6 +516,7 @@ async function bookingsQuery(where = '', params = []) {
     LEFT JOIN service_categories sc ON sc.id=b.service_category_id
     LEFT JOIN services s ON s.id=b.service_id
     LEFT JOIN artists a ON a.id=b.assigned_artist_id
+    LEFT JOIN artists pa ON pa.id=b.preferred_artist_id
     ${where}
     ORDER BY b.created_at DESC
   `, params);
@@ -936,6 +988,155 @@ app.delete(['/api/admin/artists/:id','/api/admin/beauticians/:id'], async (req, 
     await query(`DELETE FROM artists WHERE id=$1`, [req.params.id]);
     res.json({ ok: true, deleted_id: req.params.id });
   } catch (error) { res.status(500).json({ error: 'Failed to delete beautician', details: error.message }); }
+});
+
+
+app.get('/api/beauticians', async (req, res) => {
+  try {
+    const params = [];
+    const where = [`a.status='active'`];
+    if (req.query.region_id) { params.push(req.query.region_id); where.push(`(a.region_id=$${params.length} OR a.region_id IS NULL)`); }
+    if (req.query.city_id) { params.push(req.query.city_id); where.push(`(a.city_id=$${params.length} OR a.city_id IS NULL)`); }
+    if (req.query.service_id) { params.push(req.query.service_id); where.push(`(a.main_expertise_service_id=$${params.length} OR EXISTS (SELECT 1 FROM beautician_services bs WHERE bs.beautician_id=a.id AND bs.service_id=$${params.length}))`); }
+    const result = await query(`
+      SELECT a.id, a.name, a.phone, a.bio, a.skills, a.rating, a.status, a.region_id, a.city_id, a.main_expertise_service_id,
+        r.name_ar AS region_name, c.name_ar AS city_name, COALESCE(ms.name_ar, ms.name) AS main_expertise_name,
+        COALESCE(ROUND(AVG(br.rating)::numeric,1), ROUND(AVG(ar.overall_rating)::numeric,1), a.rating) AS review_rating,
+        (COUNT(DISTINCT br.id) + COUNT(DISTINCT ar.id))::int AS review_count,
+        COUNT(DISTINCT p.id)::int AS portfolio_count,
+        MIN(CASE WHEN p.is_featured THEN p.image_url ELSE NULL END) AS featured_image_url,
+        MIN(p.image_url) AS first_image_url
+      FROM artists a
+      LEFT JOIN regions r ON r.id=a.region_id
+      LEFT JOIN cities c ON c.id=a.city_id
+      LEFT JOIN services ms ON ms.id=a.main_expertise_service_id
+      LEFT JOIN beautician_portfolio p ON p.beautician_id=a.id AND p.status='published'
+      LEFT JOIN beautician_reviews br ON br.beautician_id=a.id AND br.status='published'
+      LEFT JOIN artist_reviews ar ON ar.artist_id=a.id
+      WHERE ${where.join(' AND ')}
+      GROUP BY a.id, r.name_ar, c.name_ar, ms.name_ar, ms.name
+      ORDER BY review_rating DESC NULLS LAST, portfolio_count DESC, a.name
+    `, params);
+    res.json(result.rows);
+  } catch (error) { res.status(500).json({ error: 'Failed to load beauticians', details: error.message }); }
+});
+
+app.get('/api/beauticians/:id', async (req, res) => {
+  try {
+    const info = await query(`
+      SELECT a.*, r.name_ar AS region_name, c.name_ar AS city_name, COALESCE(ms.name_ar, ms.name) AS main_expertise_name,
+        COALESCE(ROUND(AVG(br.rating)::numeric,1), ROUND(AVG(ar.overall_rating)::numeric,1), a.rating) AS review_rating,
+        (COUNT(DISTINCT br.id) + COUNT(DISTINCT ar.id))::int AS review_count
+      FROM artists a
+      LEFT JOIN regions r ON r.id=a.region_id
+      LEFT JOIN cities c ON c.id=a.city_id
+      LEFT JOIN services ms ON ms.id=a.main_expertise_service_id
+      LEFT JOIN beautician_reviews br ON br.beautician_id=a.id AND br.status='published'
+      LEFT JOIN artist_reviews ar ON ar.artist_id=a.id
+      WHERE a.id=$1
+      GROUP BY a.id, r.name_ar, c.name_ar, ms.name_ar, ms.name
+    `, [req.params.id]);
+    if (!info.rows[0]) return res.status(404).json({ error: 'Beautician not found' });
+    const portfolio = await query(`SELECT p.*, COALESCE(s.name_ar, s.name) AS service_name, sc.name_ar AS category_name FROM beautician_portfolio p LEFT JOIN services s ON s.id=p.service_id LEFT JOIN service_categories sc ON sc.id=p.service_category_id WHERE p.beautician_id=$1 AND p.status='published' ORDER BY p.is_featured DESC, p.sort_order, p.created_at DESC`, [req.params.id]);
+    const reviews = await query(`SELECT * FROM beautician_reviews WHERE beautician_id=$1 AND status='published' ORDER BY created_at DESC LIMIT 20`, [req.params.id]);
+    res.json({ beautician: info.rows[0], portfolio: portfolio.rows, reviews: reviews.rows });
+  } catch (error) { res.status(500).json({ error: 'Failed to load beautician details', details: error.message }); }
+});
+
+app.get('/api/portfolio', async (req, res) => {
+  try {
+    const params = [];
+    const where = [`p.status='published'`];
+    if (req.query.beautician_id) { params.push(req.query.beautician_id); where.push(`p.beautician_id=$${params.length}`); }
+    if (req.query.service_id) { params.push(req.query.service_id); where.push(`p.service_id=$${params.length}`); }
+    if (req.query.category_id) { params.push(req.query.category_id); where.push(`p.service_category_id=$${params.length}`); }
+    const result = await query(`
+      SELECT p.*, a.name AS beautician_name, COALESCE(s.name_ar, s.name) AS service_name, sc.name_ar AS category_name
+      FROM beautician_portfolio p
+      LEFT JOIN artists a ON a.id=p.beautician_id
+      LEFT JOIN services s ON s.id=p.service_id
+      LEFT JOIN service_categories sc ON sc.id=p.service_category_id
+      WHERE ${where.join(' AND ')}
+      ORDER BY p.is_featured DESC, p.sort_order, p.created_at DESC
+      LIMIT 100
+    `, params);
+    res.json(result.rows);
+  } catch (error) { res.status(500).json({ error: 'Failed to load portfolio', details: error.message }); }
+});
+
+app.get('/api/admin/beautician-portfolio', async (req, res) => {
+  try {
+    const result = await query(`
+      SELECT p.*, a.name AS beautician_name, COALESCE(s.name_ar, s.name) AS service_name, sc.name_ar AS category_name
+      FROM beautician_portfolio p
+      LEFT JOIN artists a ON a.id=p.beautician_id
+      LEFT JOIN services s ON s.id=p.service_id
+      LEFT JOIN service_categories sc ON sc.id=p.service_category_id
+      ORDER BY p.created_at DESC
+    `);
+    res.json(result.rows);
+  } catch (error) { res.status(500).json({ error: 'Failed to load portfolio', details: error.message }); }
+});
+
+app.post('/api/admin/beautician-portfolio', async (req, res) => {
+  try {
+    const p = req.body;
+    if (!p.beautician_id || !p.title_ar || !p.image_url) return res.status(400).json({ error: 'beautician_id, title_ar and image_url are required' });
+    const result = await query(`
+      INSERT INTO beautician_portfolio (beautician_id, service_category_id, service_id, title_ar, title_en, description, image_url, is_featured, status, sort_order)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *
+    `, [p.beautician_id, p.service_category_id || null, p.service_id || null, nullable(p.title_ar), nullable(p.title_en), nullable(p.description), p.image_url, !!p.is_featured, p.status || 'published', p.sort_order || 0]);
+    res.status(201).json(result.rows[0]);
+  } catch (error) { res.status(500).json({ error: 'Failed to create portfolio item', details: error.message }); }
+});
+
+app.patch('/api/admin/beautician-portfolio/:id', async (req, res) => {
+  try {
+    const allowed = ['beautician_id','service_category_id','service_id','title_ar','title_en','description','image_url','is_featured','status','sort_order'];
+    const columns = allowed.filter(f => req.body[f] !== undefined);
+    if (!columns.length) return res.status(400).json({ error: 'No fields sent' });
+    const sets = columns.map((f, i) => `${f}=$${i + 1}`).join(', ');
+    const values = columns.map(f => req.body[f] === '' ? null : req.body[f]);
+    const result = await query(`UPDATE beautician_portfolio SET ${sets}, updated_at=NOW() WHERE id=$${values.length + 1} RETURNING *`, [...values, req.params.id]);
+    if (!result.rows[0]) return res.status(404).json({ error: 'Portfolio item not found' });
+    res.json(result.rows[0]);
+  } catch (error) { res.status(500).json({ error: 'Failed to update portfolio item', details: error.message }); }
+});
+
+app.delete('/api/admin/beautician-portfolio/:id', async (req, res) => {
+  try { await query(`DELETE FROM beautician_portfolio WHERE id=$1`, [req.params.id]); res.json({ ok: true, deleted_id: req.params.id }); }
+  catch (error) { res.status(500).json({ error: 'Failed to delete portfolio item', details: error.message }); }
+});
+
+app.get('/api/admin/beautician-reviews', async (req, res) => {
+  try {
+    const result = await query(`
+      SELECT br.*, a.name AS beautician_name, c.name AS customer_name, c.phone AS customer_phone
+      FROM beautician_reviews br
+      LEFT JOIN artists a ON a.id=br.beautician_id
+      LEFT JOIN customers c ON c.id=br.customer_id
+      ORDER BY br.created_at DESC
+    `);
+    res.json(result.rows);
+  } catch (error) { res.status(500).json({ error: 'Failed to load reviews', details: error.message }); }
+});
+
+app.post('/api/customer/reviews', async (req, res) => {
+  try {
+    const r = req.body;
+    if (!r.booking_id || !r.rating) return res.status(400).json({ error: 'booking_id and rating are required' });
+    const booking = await query(`SELECT id, customer_id, assigned_artist_id, preferred_artist_id FROM bookings WHERE id=$1`, [r.booking_id]);
+    if (!booking.rows[0]) return res.status(404).json({ error: 'Booking not found' });
+    const beauticianId = booking.rows[0].assigned_artist_id || booking.rows[0].preferred_artist_id;
+    const result = await query(`
+      INSERT INTO beautician_reviews (booking_id, beautician_id, customer_id, rating, review_text, status)
+      VALUES ($1,$2,$3,$4,$5,'published')
+      ON CONFLICT (booking_id) DO UPDATE SET rating=EXCLUDED.rating, review_text=EXCLUDED.review_text, updated_at=NOW()
+      RETURNING *
+    `, [r.booking_id, beauticianId, booking.rows[0].customer_id, Number(r.rating), nullable(r.review_text)]);
+    await query(`UPDATE bookings SET customer_review_rating=$1, customer_review_text=$2, updated_at=NOW() WHERE id=$3`, [Number(r.rating), nullable(r.review_text), r.booking_id]);
+    res.status(201).json(result.rows[0]);
+  } catch (error) { res.status(500).json({ error: 'Failed to save review', details: error.message }); }
 });
 
 app.get('/api/customer/bookings', async (req, res) => {
