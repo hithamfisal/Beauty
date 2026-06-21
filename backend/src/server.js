@@ -155,6 +155,12 @@ async function findOrCreateCustomer(payload) {
 
 app.get('/api/health', (req, res) => {
   res.json({ ok: true, app: 'Beauty Home Service API' });
+
+// Vercel/simple health alias. Useful when a hosting rewrite strips the /api prefix.
+app.get('/health', (req, res) => {
+  res.json({ ok: true, app: 'Beauty Home Service API' });
+});
+
 });
 
 app.get('/api/cities', async (req, res) => {
