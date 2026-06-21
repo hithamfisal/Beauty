@@ -1,4 +1,4 @@
-# Beauty Home Service v1.2 + v1.3 Update
+# Henna Booking v1.2 + v1.3 Update
 
 ## v1.2
 - تطبيق عميلة Flutter مرتبط بالـ Backend.
@@ -10,28 +10,28 @@
 
 ## v1.3
 - إدارة توفر الحنانات.
-- تسجيل تقييم داخلي للBeauty Home Service بعد الطلب.
-- تحسين ملف الBeauty Home Service داخل Backend بإحصائيات الطلبات والتقييم.
-- إضافة APIs لملف الBeauty Home Service والتوفر والتقييم.
+- تسجيل تقييم داخلي للحنانة بعد الطلب.
+- تحسين ملف الحنانة داخل Backend بإحصائيات الطلبات والتقييم.
+- إضافة APIs لملف الحنانة والتوفر والتقييم.
 - إضافة واجهة في لوحة الإدارة لإضافة توفر وتقييمات.
 
 ## تشغيل Backend
 ```powershell
-cd "D:\Dashboards Projects\Beauty\Beauty V1\backend"
+cd "D:\Dashboards Projects\Henna Application\henna_booking_mvp_v1\backend"
 yarn install
 yarn dev
 ```
 
 ## تشغيل Admin
 ```powershell
-cd "D:\Dashboards Projects\Beauty\Beauty V1\admin-dashboard"
+cd "D:\Dashboards Projects\Henna Application\henna_booking_mvp_v1\admin-dashboard"
 yarn install
 yarn dev
 ```
 
 ## تشغيل Mobile App على Android Emulator
 ```powershell
-cd "D:\Dashboards Projects\Beauty\Beauty V1\mobile-app"
+cd "D:\Dashboards Projects\Henna Application\henna_booking_mvp_v1\mobile-app"
 flutter pub get
 flutter run --dart-define=API_BASE_URL=http://10.0.2.2:4000/api
 ```

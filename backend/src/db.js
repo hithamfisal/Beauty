@@ -2,15 +2,14 @@ import pg from 'pg';
 import dotenv from 'dotenv';
 dotenv.config();
 
-const isProduction = process.env.NODE_ENV === 'production' || !!process.env.VERCEL;
-const sslDisabled = process.env.PGSSLMODE === 'disable' || process.env.DATABASE_SSL === 'false';
+const connectionString = process.env.DATABASE_URL;
+const isCloudPostgres = connectionString && /neon\.tech|sslmode=require|amazonaws\.com|supabase\.co/i.test(connectionString);
 
 export const pool = new pg.Pool({
-  connectionString: process.env.DATABASE_URL,
-  ssl: isProduction && !sslDisabled ? { rejectUnauthorized: false } : undefined
+  connectionString,
+  ssl: isCloudPostgres ? { rejectUnauthorized: false } : undefined
 });
 
 export async function query(text, params = []) {
-  const result = await pool.query(text, params);
-  return result;
+  return pool.query(text, params);
 }

@@ -1,10 +1,12 @@
-# Beauty Home Service
+# Henna Booking MVP v1
 
-Beauty Home Service is a home-service booking MVP with:
+Starter implementation package for Henna booking platform.
 
-- Backend API: `backend`
-- Admin Dashboard: `admin-dashboard`
-- Flutter Mobile App: `mobile-app`
-- Documentation: `docs`
+## Folders
+- backend: Node.js + Express API
+- admin-dashboard: React + Vite admin dashboard
+- mobile-app: Flutter customer app
+- docs: SRS, API plan, database notes
 
-See `DEPLOYMENT_GITHUB_VERCEL.md` for GitHub, Cloud PostgreSQL, Vercel, and APK deployment steps.
+## Status
+Initial implementation skeleton prepared for MVP development.

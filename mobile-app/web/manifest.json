@@ -1,6 +1,6 @@
 {
-    "name": "beauty_home_service",
-    "short_name": "beauty_home_service",
+    "name": "henna_booking_mobile",
+    "short_name": "henna_booking_mobile",
     "start_url": ".",
     "display": "standalone",
     "background_color": "#0175C2",

@@ -1,4 +1,4 @@
-# Beauty Home Service Backend
+# Henna Booking Backend
 
 ## Run
 ```bash

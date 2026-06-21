@@ -1,4 +1,4 @@
-# Beauty Home Service Admin Dashboard
+# Henna Booking Admin Dashboard
 
 ```bash
 npm install

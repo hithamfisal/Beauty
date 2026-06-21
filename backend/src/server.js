@@ -7,13 +7,91 @@ dotenv.config();
 
 const app = express();
 const PORT = process.env.PORT || 4000;
-const allowedOrigin = process.env.CORS_ORIGIN || '*';
 
-app.use(cors({ origin: allowedOrigin === '*' ? true : allowedOrigin, credentials: true }));
-app.use(express.json({ limit: '10mb' }));
+app.use(cors());
+app.use(express.json({ limit: '20mb' }));
 
-async function ensureV12V13Schema() {
-  await query('CREATE EXTENSION IF NOT EXISTS "uuid-ossp"');
+function normalizeText(value) {
+  return typeof value === 'string' ? value.trim() : value;
+}
+
+function normalizePhone(value) {
+  return typeof value === 'string' ? value.trim().replace(/\s+/g, '') : value;
+}
+
+function nullable(value) {
+  const v = normalizeText(value);
+  return v === '' ? null : v;
+}
+
+async function columnExists(tableName, columnName) {
+  const result = await query(
+    `SELECT 1 FROM information_schema.columns WHERE table_name=$1 AND column_name=$2 LIMIT 1`,
+    [tableName, columnName]
+  );
+  return result.rows.length > 0;
+}
+
+async function ensureV14Schema() {
+  await query(`CREATE EXTENSION IF NOT EXISTS "uuid-ossp"`);
+
+  await query(`
+    CREATE TABLE IF NOT EXISTS regions (
+      id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+      external_id VARCHAR(80) UNIQUE,
+      name_ar VARCHAR(160) NOT NULL,
+      name_en VARCHAR(160),
+      status VARCHAR(20) NOT NULL DEFAULT 'active',
+      sort_order INT DEFAULT 0,
+      created_at TIMESTAMP DEFAULT NOW(),
+      updated_at TIMESTAMP DEFAULT NOW()
+    )
+  `);
+
+  await query(`
+    CREATE TABLE IF NOT EXISTS service_categories (
+      id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+      name_ar VARCHAR(160) NOT NULL,
+      name_en VARCHAR(160),
+      description TEXT,
+      status VARCHAR(20) NOT NULL DEFAULT 'active',
+      sort_order INT DEFAULT 0,
+      created_at TIMESTAMP DEFAULT NOW(),
+      updated_at TIMESTAMP DEFAULT NOW()
+    )
+  `);
+
+  await query(`ALTER TABLE cities ADD COLUMN IF NOT EXISTS region_id UUID REFERENCES regions(id)`);
+  await query(`ALTER TABLE cities ADD COLUMN IF NOT EXISTS external_id VARCHAR(80)`);
+  await query(`ALTER TABLE cities ADD COLUMN IF NOT EXISTS sort_order INT DEFAULT 0`);
+  await query(`ALTER TABLE districts ADD COLUMN IF NOT EXISTS external_id VARCHAR(80)`);
+  await query(`ALTER TABLE districts ADD COLUMN IF NOT EXISTS sort_order INT DEFAULT 0`);
+  await query(`ALTER TABLE services ADD COLUMN IF NOT EXISTS category_id UUID REFERENCES service_categories(id)`);
+  await query(`ALTER TABLE services ADD COLUMN IF NOT EXISTS name_ar VARCHAR(160)`);
+  await query(`ALTER TABLE services ADD COLUMN IF NOT EXISTS name_en VARCHAR(160)`);
+  await query(`ALTER TABLE services ADD COLUMN IF NOT EXISTS base_price NUMERIC(10,2)`);
+  await query(`ALTER TABLE services ADD COLUMN IF NOT EXISTS duration_minutes INT`);
+  await query(`ALTER TABLE services ADD COLUMN IF NOT EXISTS sort_order INT DEFAULT 0`);
+  await query(`ALTER TABLE customers ADD COLUMN IF NOT EXISTS region_id UUID REFERENCES regions(id)`);
+  await query(`ALTER TABLE customers ADD COLUMN IF NOT EXISTS district_id UUID REFERENCES districts(id)`);
+  await query(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS region_id UUID REFERENCES regions(id)`);
+  await query(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS service_category_id UUID REFERENCES service_categories(id)`);
+  await query(`ALTER TABLE artists ADD COLUMN IF NOT EXISTS region_id UUID REFERENCES regions(id)`);
+  await query(`ALTER TABLE artists ADD COLUMN IF NOT EXISTS main_expertise_service_id UUID REFERENCES services(id)`);
+
+  await query(`
+    CREATE TABLE IF NOT EXISTS beautician_services (
+      id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+      beautician_id UUID REFERENCES artists(id) ON DELETE CASCADE,
+      service_id UUID REFERENCES services(id) ON DELETE CASCADE,
+      experience_level VARCHAR(80),
+      is_primary BOOLEAN DEFAULT FALSE,
+      created_at TIMESTAMP DEFAULT NOW(),
+      updated_at TIMESTAMP DEFAULT NOW(),
+      UNIQUE(beautician_id, service_id)
+    )
+  `);
+
   await query(`
     CREATE TABLE IF NOT EXISTS artist_availability (
       id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -45,226 +123,244 @@ async function ensureV12V13Schema() {
     )
   `);
 
-  await query(`CREATE INDEX IF NOT EXISTS idx_artist_availability_artist_date ON artist_availability(artist_id, available_date)`);
-  await query(`CREATE INDEX IF NOT EXISTS idx_artist_reviews_artist ON artist_reviews(artist_id)`);
+  await query(`CREATE INDEX IF NOT EXISTS idx_cities_region ON cities(region_id)`);
+  await query(`CREATE INDEX IF NOT EXISTS idx_districts_city ON districts(city_id)`);
+  await query(`CREATE INDEX IF NOT EXISTS idx_services_category ON services(category_id)`);
+  await query(`CREATE INDEX IF NOT EXISTS idx_bookings_region ON bookings(region_id)`);
+  await query(`CREATE INDEX IF NOT EXISTS idx_bookings_category ON bookings(service_category_id)`);
+
+  const hasName = await columnExists('services', 'name');
+  if (hasName) {
+    await query(`UPDATE services SET name_ar = COALESCE(name_ar, name), name_en = COALESCE(name_en, name) WHERE name_ar IS NULL OR name_en IS NULL`);
+  }
+
+  const existingCategories = await query(`SELECT COUNT(*)::int AS count FROM service_categories`);
+  if (existingCategories.rows[0].count === 0) {
+    const cats = [
+      ['الحناء', 'Henna', 'خدمات الحناء والنقوش'],
+      ['المكياج', 'Makeup', 'خدمات مكياج منزلية'],
+      ['الشعر', 'Hair', 'تصفيف وتسريحات الشعر'],
+      ['العناية', 'Care', 'العناية بالبشرة واليدين والقدمين']
+    ];
+    for (let i = 0; i < cats.length; i++) {
+      await query(`INSERT INTO service_categories (name_ar, name_en, description, sort_order) VALUES ($1,$2,$3,$4)`, [...cats[i], i + 1]);
+    }
+  }
+
+  const hennaCategory = await query(`SELECT id FROM service_categories WHERE name_ar='الحناء' LIMIT 1`);
+  if (hennaCategory.rows[0]) {
+    await query(`UPDATE services SET category_id = COALESCE(category_id, $1) WHERE category_id IS NULL`, [hennaCategory.rows[0].id]);
+  }
+
+  const serviceCount = await query(`SELECT COUNT(*)::int AS count FROM services`);
+  if (serviceCount.rows[0].count === 0) {
+    const categories = await query(`SELECT id, name_ar FROM service_categories`);
+    const idByName = Object.fromEntries(categories.rows.map(c => [c.name_ar, c.id]));
+    const services = [
+      [idByName['الحناء'], 'حناء بسيطة', 'Simple Henna', 100, 200, 60],
+      [idByName['الحناء'], 'حناء متوسطة', 'Medium Henna', 200, 400, 120],
+      [idByName['الحناء'], 'حناء فخمة', 'Luxury Henna', 400, 700, 180],
+      [idByName['الحناء'], 'حناء عروس', 'Bridal Henna', 700, 2000, 240],
+      [idByName['المكياج'], 'مكياج ناعم', 'Soft Makeup', 250, 500, 90],
+      [idByName['المكياج'], 'مكياج سهرة', 'Evening Makeup', 450, 900, 120],
+      [idByName['المكياج'], 'مكياج عروس', 'Bridal Makeup', 900, 2500, 180],
+      [idByName['الشعر'], 'استشوار', 'Blow Dry', 120, 250, 60],
+      [idByName['الشعر'], 'تسريحة بسيطة', 'Simple Hairstyle', 200, 450, 90],
+      [idByName['الشعر'], 'تسريحة عروس', 'Bridal Hairstyle', 600, 1600, 180],
+      [idByName['العناية'], 'تنظيف بشرة', 'Facial Cleansing', 250, 600, 90],
+      [idByName['العناية'], 'عناية يدين', 'Hand Care', 100, 250, 45],
+      [idByName['العناية'], 'عناية قدمين', 'Foot Care', 120, 300, 60]
+    ];
+    for (let i = 0; i < services.length; i++) {
+      await query(`
+        INSERT INTO services (category_id, name, name_ar, name_en, min_price, max_price, duration_minutes, status, sort_order)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,'active',$8)
+      `, [services[i][0], services[i][1], services[i][1], services[i][2], services[i][3], services[i][4], services[i][5], i + 1]);
+    }
+  }
+
+  const regionCount = await query(`SELECT COUNT(*)::int AS count FROM regions`);
+  if (regionCount.rows[0].count === 0) {
+    const regions = [
+      ['1', 'الرياض', 'Riyadh'], ['2', 'مكة المكرمة', 'Makkah Al Mukarramah'], ['3', 'المدينة المنورة', 'Al Madinah Al Munawwarah'],
+      ['4', 'القصيم', 'Al Qassim'], ['5', 'المنطقة الشرقية', 'Eastern Province'], ['6', 'عسير', 'Aseer'], ['7', 'تبوك', 'Tabuk'],
+      ['8', 'حائل', 'Hail'], ['9', 'الحدود الشمالية', 'Northern Borders'], ['10', 'جازان', 'Jazan'], ['11', 'نجران', 'Najran'],
+      ['12', 'الباحة', 'Al Baha'], ['13', 'الجوف', 'Al Jouf']
+    ];
+    for (let i = 0; i < regions.length; i++) {
+      await query(`INSERT INTO regions (external_id, name_ar, name_en, sort_order) VALUES ($1,$2,$3,$4)`, [...regions[i], i + 1]);
+    }
+  }
+
+  const riyadh = await query(`SELECT id FROM regions WHERE name_ar='الرياض' LIMIT 1`);
+  if (riyadh.rows[0]) {
+    await query(`UPDATE cities SET region_id = COALESCE(region_id, $1) WHERE name_ar IN ('الرياض')`, [riyadh.rows[0].id]);
+  }
+
+  const eastern = await query(`SELECT id FROM regions WHERE name_ar='المنطقة الشرقية' LIMIT 1`);
+  if (eastern.rows[0]) {
+    await query(`UPDATE cities SET region_id = COALESCE(region_id, $1) WHERE name_ar IN ('الدمام','الخبر','الظهران')`, [eastern.rows[0].id]);
+  }
+
+  const makkah = await query(`SELECT id FROM regions WHERE name_ar='مكة المكرمة' LIMIT 1`);
+  if (makkah.rows[0]) {
+    await query(`UPDATE cities SET region_id = COALESCE(region_id, $1) WHERE name_ar IN ('جدة','مكة','مكة المكرمة')`, [makkah.rows[0].id]);
+  }
 }
 
-ensureV12V13Schema().catch(error => console.error('v1.2/v1.3 schema init failed:', error));
+ensureV14Schema().catch(error => console.error('v1.4 schema init failed:', error));
 
-
-function normalizeText(value) {
-  return typeof value === 'string' ? value.trim() : value;
-}
-
-function normalizePhone(value) {
-  return typeof value === 'string' ? value.trim().replace(/\s+/g, '') : value;
-}
-
-async function findOrCreateCity(cityName) {
-  const name = normalizeText(cityName);
+async function findOrCreateRegion(regionName) {
+  const name = nullable(regionName);
   if (!name) return null;
+  const existing = await query(`SELECT id FROM regions WHERE name_ar=$1 OR name_en=$1 ORDER BY created_at ASC LIMIT 1`, [name]);
+  if (existing.rows[0]) return existing.rows[0].id;
+  const created = await query(`INSERT INTO regions (name_ar, name_en, status) VALUES ($1,$2,'active') RETURNING id`, [name, name]);
+  return created.rows[0].id;
+}
 
+async function findOrCreateCity(cityName, regionId = null) {
+  const name = nullable(cityName);
+  if (!name) return null;
   const existing = await query(
-    `SELECT id
-     FROM cities
-     WHERE name_ar = $1 OR name_en = $1
-     ORDER BY created_at ASC
-     LIMIT 1`,
-    [name]
+    `SELECT id FROM cities WHERE (name_ar=$1 OR name_en=$1) AND ($2::uuid IS NULL OR region_id=$2) ORDER BY created_at ASC LIMIT 1`,
+    [name, regionId]
   );
-
-  if (existing.rows.length > 0) return existing.rows[0].id;
-
-  const created = await query(
-    'INSERT INTO cities (name_ar, name_en, status) VALUES ($1, $2, $3) RETURNING id',
-    [name, name, 'active']
-  );
-
+  if (existing.rows[0]) return existing.rows[0].id;
+  const created = await query(`INSERT INTO cities (region_id, name_ar, name_en, status) VALUES ($1,$2,$3,'active') RETURNING id`, [regionId, name, name]);
   return created.rows[0].id;
 }
 
 async function findOrCreateDistrict(cityId, districtName) {
-  const name = normalizeText(districtName);
+  const name = nullable(districtName);
   if (!cityId || !name) return null;
-
-  const existing = await query(
-    `SELECT id
-     FROM districts
-     WHERE city_id = $1
-       AND (name_ar = $2 OR name_en = $2)
-     ORDER BY created_at ASC
-     LIMIT 1`,
-    [cityId, name]
-  );
-
-  if (existing.rows.length > 0) return existing.rows[0].id;
-
-  const created = await query(
-    'INSERT INTO districts (city_id, name_ar, name_en, status) VALUES ($1, $2, $3, $4) RETURNING id',
-    [cityId, name, name, 'active']
-  );
-
+  const existing = await query(`SELECT id FROM districts WHERE city_id=$1 AND (name_ar=$2 OR name_en=$2) ORDER BY created_at ASC LIMIT 1`, [cityId, name]);
+  if (existing.rows[0]) return existing.rows[0].id;
+  const created = await query(`INSERT INTO districts (city_id, name_ar, name_en, status) VALUES ($1,$2,$3,'active') RETURNING id`, [cityId, name, name]);
   return created.rows[0].id;
 }
 
 async function findServiceId(serviceName) {
-  const name = normalizeText(serviceName);
+  const name = nullable(serviceName);
   if (!name) return null;
-
-  const existing = await query(
-    `SELECT id
-     FROM services
-     WHERE name = $1
-     ORDER BY created_at ASC
-     LIMIT 1`,
-    [name]
-  );
-
+  const existing = await query(`SELECT id FROM services WHERE name_ar=$1 OR name_en=$1 OR name=$1 ORDER BY created_at ASC LIMIT 1`, [name]);
   return existing.rows[0]?.id || null;
 }
 
 async function findOrCreateCustomer(payload) {
-  let customerId = payload.customer_id || null;
   const phone = normalizePhone(payload.phone);
-  const name = normalizeText(payload.name) || 'عميلة بدون اسم';
-
-  if (customerId) return customerId;
+  if (payload.customer_id) return payload.customer_id;
   if (!phone) return null;
-
-  const existing = await query(
-    'SELECT id FROM customers WHERE phone = $1 LIMIT 1',
-    [phone]
-  );
-
-  if (existing.rows.length > 0) {
-    customerId = existing.rows[0].id;
-    await query(
-      'UPDATE customers SET name = COALESCE($1, name), updated_at = NOW() WHERE id = $2',
-      [name, customerId]
-    );
-    return customerId;
+  const existing = await query(`SELECT id FROM customers WHERE phone=$1 LIMIT 1`, [phone]);
+  if (existing.rows[0]) {
+    await query(`UPDATE customers SET name=COALESCE($1,name), region_id=COALESCE($2,region_id), city_id=COALESCE($3,city_id), district_id=COALESCE($4,district_id), updated_at=NOW() WHERE id=$5`, [nullable(payload.name), payload.region_id || null, payload.city_id || null, payload.district_id || null, existing.rows[0].id]);
+    return existing.rows[0].id;
   }
-
-  const created = await query(
-    'INSERT INTO customers (name, phone, status) VALUES ($1, $2, $3) RETURNING id',
-    [name, phone, 'active']
-  );
-
+  const created = await query(`INSERT INTO customers (name, phone, region_id, city_id, district_id, status) VALUES ($1,$2,$3,$4,$5,'active') RETURNING id`, [nullable(payload.name) || 'عميلة بدون اسم', phone, payload.region_id || null, payload.city_id || null, payload.district_id || null]);
   return created.rows[0].id;
 }
 
-app.get('/api/health', (req, res) => {
-  res.json({ ok: true, app: 'Beauty Home Service API' });
+function selectNameExpression(alias, fallback = 'name') {
+  return `COALESCE(${alias}.name_ar, ${alias}.${fallback})`;
+}
 
-// Vercel/simple health alias. Useful when a hosting rewrite strips the /api prefix.
-app.get('/health', (req, res) => {
-  res.json({ ok: true, app: 'Beauty Home Service API' });
+app.get(['/api/health', '/health'], (req, res) => {
+  res.json({ ok: true, app: 'Beauty Home Service API', version: 'v1.4' });
 });
 
+app.get('/api/regions', async (req, res) => {
+  const result = await query(`SELECT * FROM regions WHERE status='active' ORDER BY sort_order, name_ar`);
+  res.json(result.rows);
 });
 
 app.get('/api/cities', async (req, res) => {
-  try {
-    const result = await query(
-      "SELECT * FROM cities WHERE status='active' ORDER BY name_ar"
-    );
-    res.json(result.rows);
-  } catch (error) {
-    res.status(500).json({ error: 'Failed to load cities', details: error.message });
-  }
+  const params = [];
+  let where = `WHERE status='active'`;
+  if (req.query.region_id) { params.push(req.query.region_id); where += ` AND region_id=$1`; }
+  const result = await query(`SELECT * FROM cities ${where} ORDER BY sort_order, name_ar`, params);
+  res.json(result.rows);
+});
+
+app.get('/api/districts', async (req, res) => {
+  const params = [];
+  let where = `WHERE status='active'`;
+  if (req.query.city_id) { params.push(req.query.city_id); where += ` AND city_id=$1`; }
+  const result = await query(`SELECT * FROM districts ${where} ORDER BY sort_order, name_ar`, params);
+  res.json(result.rows);
 });
 
 app.get('/api/districts/:cityId', async (req, res) => {
-  try {
-    const result = await query(
-      "SELECT * FROM districts WHERE city_id=$1 AND status='active' ORDER BY name_ar",
-      [req.params.cityId]
-    );
-    res.json(result.rows);
-  } catch (error) {
-    res.status(500).json({ error: 'Failed to load districts', details: error.message });
-  }
+  const result = await query(`SELECT * FROM districts WHERE city_id=$1 AND status='active' ORDER BY sort_order, name_ar`, [req.params.cityId]);
+  res.json(result.rows);
+});
+
+app.get('/api/service-categories', async (req, res) => {
+  const result = await query(`SELECT * FROM service_categories WHERE status='active' ORDER BY sort_order, name_ar`);
+  res.json(result.rows);
 });
 
 app.get('/api/services', async (req, res) => {
+  const params = [];
+  let where = `WHERE s.status='active'`;
+  if (req.query.category_id) { params.push(req.query.category_id); where += ` AND s.category_id=$1`; }
+  const result = await query(`
+    SELECT s.*, COALESCE(s.name_ar, s.name) AS display_name, sc.name_ar AS category_name
+    FROM services s
+    LEFT JOIN service_categories sc ON sc.id=s.category_id
+    ${where}
+    ORDER BY sc.sort_order, s.sort_order, s.min_price NULLS LAST, COALESCE(s.name_ar, s.name)
+  `, params);
+  res.json(result.rows);
+});
+
+app.get('/api/customer/catalog', async (req, res) => {
   try {
-    const result = await query(
-      "SELECT * FROM services WHERE status='active' ORDER BY min_price NULLS LAST"
-    );
-    res.json(result.rows);
+    const [regions, cities, districts, categories, services] = await Promise.all([
+      query(`SELECT * FROM regions WHERE status='active' ORDER BY sort_order, name_ar`),
+      query(`SELECT * FROM cities WHERE status='active' ORDER BY sort_order, name_ar`),
+      query(`SELECT * FROM districts WHERE status='active' ORDER BY sort_order, name_ar`),
+      query(`SELECT * FROM service_categories WHERE status='active' ORDER BY sort_order, name_ar`),
+      query(`SELECT s.*, COALESCE(s.name_ar, s.name) AS display_name, sc.name_ar AS category_name FROM services s LEFT JOIN service_categories sc ON sc.id=s.category_id WHERE s.status='active' ORDER BY sc.sort_order, s.sort_order, COALESCE(s.name_ar, s.name)`)
+    ]);
+    res.json({ regions: regions.rows, cities: cities.rows, districts: districts.rows, service_categories: categories.rows, services: services.rows });
   } catch (error) {
-    res.status(500).json({ error: 'Failed to load services', details: error.message });
+    res.status(500).json({ error: 'Failed to load customer catalog', details: error.message });
   }
 });
 
 app.post('/api/bookings', async (req, res) => {
   try {
     const b = req.body;
-
-    const customerId = await findOrCreateCustomer(b);
-    const cityId = b.city_id || await findOrCreateCity(b.city);
+    const regionId = b.region_id || await findOrCreateRegion(b.region);
+    const cityId = b.city_id || await findOrCreateCity(b.city, regionId);
     const districtId = b.district_id || await findOrCreateDistrict(cityId, b.district);
-    const serviceId = b.service_id || await findServiceId(b.service_type || b.service_name);
+    const serviceId = b.service_id || await findServiceId(b.service_type || b.service_name || b.service);
+    const serviceData = serviceId ? await query(`SELECT category_id FROM services WHERE id=$1`, [serviceId]) : { rows: [] };
+    const serviceCategoryId = b.service_category_id || serviceData.rows[0]?.category_id || null;
+    const customerId = await findOrCreateCustomer({ ...b, region_id: regionId, city_id: cityId, district_id: districtId });
 
-    if (!customerId) {
-      return res.status(400).json({ error: 'Customer is required. Send customer_id or phone.' });
-    }
-
-    if (!cityId) {
-      return res.status(400).json({ error: 'City is required. Send city_id or city.' });
-    }
-
-    if (!serviceId) {
-      return res.status(400).json({ error: 'Service is required. Send service_id or service_type.' });
-    }
-
-    if (!b.booking_date || !b.booking_time) {
-      return res.status(400).json({ error: 'booking_date and booking_time are required.' });
-    }
+    if (!customerId) return res.status(400).json({ error: 'Customer is required. Send customer_id or phone.' });
+    if (!regionId) return res.status(400).json({ error: 'Region is required. Send region_id or region.' });
+    if (!cityId) return res.status(400).json({ error: 'City is required. Send city_id or city.' });
+    if (!districtId) return res.status(400).json({ error: 'District is required. Send district_id or district.' });
+    if (!serviceId) return res.status(400).json({ error: 'Service is required. Send service_id or service_type.' });
+    if (!b.booking_date || !b.booking_time) return res.status(400).json({ error: 'booking_date and booking_time are required.' });
 
     const result = await query(`
       INSERT INTO bookings (
-        customer_id,
-        city_id,
-        district_id,
-        event_type,
-        service_id,
-        booking_date,
-        booking_time,
-        people_count,
-        address,
-        latitude,
-        longitude,
-        design_image_url,
-        customer_notes,
-        status,
-        payment_status
+        customer_id, region_id, city_id, district_id, service_category_id, event_type, service_id,
+        booking_date, booking_time, people_count, address, latitude, longitude, design_image_url,
+        customer_notes, status, payment_status
       )
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,'new','unpaid')
       RETURNING *
     `, [
-      customerId,
-      cityId,
-      districtId,
-      normalizeText(b.event_type) || null,
-      serviceId,
-      b.booking_date,
-      b.booking_time,
-      b.people_count || 1,
-      normalizeText(b.address) || null,
-      b.latitude || null,
-      b.longitude || null,
-      b.design_image_url || null,
-      normalizeText(b.customer_notes) || null,
-      'new',
-      'unpaid'
+      customerId, regionId, cityId, districtId, serviceCategoryId, nullable(b.event_type), serviceId,
+      b.booking_date, b.booking_time, b.people_count || 1, nullable(b.address), b.latitude || null, b.longitude || null,
+      b.design_image_url || null, nullable(b.customer_notes)
     ]);
 
-    await query(
-      'INSERT INTO booking_status_history (booking_id, new_status, changed_by, note) VALUES ($1,$2,$3,$4)',
-      [result.rows[0].id, 'new', 'customer', 'تم إنشاء الطلب']
-    );
-
+    await query(`INSERT INTO booking_status_history (booking_id, new_status, changed_by, note) VALUES ($1,'new','customer','تم إنشاء الطلب')`, [result.rows[0].id]);
     res.status(201).json(result.rows[0]);
   } catch (error) {
     console.error('Create booking error:', error);
@@ -274,681 +370,513 @@ app.post('/api/bookings', async (req, res) => {
 
 app.get('/api/admin/dashboard', async (req, res) => {
   try {
-    const total = await query('SELECT COUNT(*)::int AS count FROM bookings');
-    const newBookings = await query("SELECT COUNT(*)::int AS count FROM bookings WHERE status='new'");
-    const completed = await query("SELECT COUNT(*)::int AS count FROM bookings WHERE status='completed'");
-    const artists = await query("SELECT COUNT(*)::int AS count FROM artists WHERE status='active'");
-    const unassigned = await query("SELECT COUNT(*)::int AS count FROM bookings WHERE assigned_artist_id IS NULL AND status NOT IN ('completed','cancelled','unavailable')");
-    const unpaid = await query("SELECT COUNT(*)::int AS count FROM bookings WHERE COALESCE(payment_status,'unpaid') <> 'paid' AND status NOT IN ('cancelled','unavailable')");
-    const today = await query("SELECT COUNT(*)::int AS count FROM bookings WHERE booking_date = CURRENT_DATE AND status NOT IN ('cancelled','unavailable')");
-
-    res.json({
-      total_bookings: total.rows[0].count,
-      new_bookings: newBookings.rows[0].count,
-      completed_bookings: completed.rows[0].count,
-      active_artists: artists.rows[0].count,
-      unassigned_bookings: unassigned.rows[0].count,
-      unpaid_bookings: unpaid.rows[0].count,
-      today_bookings: today.rows[0].count
-    });
+    const total = await query(`SELECT COUNT(*)::int AS count FROM bookings`);
+    const newBookings = await query(`SELECT COUNT(*)::int AS count FROM bookings WHERE status='new'`);
+    const completed = await query(`SELECT COUNT(*)::int AS count FROM bookings WHERE status='completed'`);
+    const beauticians = await query(`SELECT COUNT(*)::int AS count FROM artists WHERE status='active'`);
+    const unassigned = await query(`SELECT COUNT(*)::int AS count FROM bookings WHERE assigned_artist_id IS NULL AND status NOT IN ('completed','cancelled','unavailable')`);
+    const unpaid = await query(`SELECT COUNT(*)::int AS count FROM bookings WHERE COALESCE(payment_status,'unpaid') <> 'paid' AND status NOT IN ('cancelled','unavailable')`);
+    const today = await query(`SELECT COUNT(*)::int AS count FROM bookings WHERE booking_date = CURRENT_DATE AND status NOT IN ('cancelled','unavailable')`);
+    res.json({ total_bookings: total.rows[0].count, new_bookings: newBookings.rows[0].count, completed_bookings: completed.rows[0].count, active_artists: beauticians.rows[0].count, active_beauticians: beauticians.rows[0].count, unassigned_bookings: unassigned.rows[0].count, unpaid_bookings: unpaid.rows[0].count, today_bookings: today.rows[0].count });
   } catch (error) {
     res.status(500).json({ error: 'Failed to load dashboard', details: error.message });
   }
 });
 
-app.get('/api/admin/bookings', async (req, res) => {
-  try {
-    const result = await query(`
-      SELECT
-        b.*,
-        c.name AS customer_name,
-        c.phone AS customer_phone,
-        city.name_ar AS city_name,
-        d.name_ar AS district_name,
-        s.name AS service_name,
-        a.name AS artist_name,
-        a.phone AS artist_phone
-      FROM bookings b
-      LEFT JOIN customers c ON c.id = b.customer_id
-      LEFT JOIN cities city ON city.id = b.city_id
-      LEFT JOIN districts d ON d.id = b.district_id
-      LEFT JOIN services s ON s.id = b.service_id
-      LEFT JOIN artists a ON a.id = b.assigned_artist_id
-      ORDER BY b.created_at DESC
-    `);
+async function bookingsQuery(where = '', params = []) {
+  return query(`
+    SELECT b.*, c.name AS customer_name, c.phone AS customer_phone,
+      r.name_ar AS region_name, city.name_ar AS city_name, d.name_ar AS district_name,
+      sc.name_ar AS service_category_name, COALESCE(s.name_ar, s.name) AS service_name,
+      a.name AS artist_name, a.phone AS artist_phone
+    FROM bookings b
+    LEFT JOIN customers c ON c.id=b.customer_id
+    LEFT JOIN regions r ON r.id=b.region_id
+    LEFT JOIN cities city ON city.id=b.city_id
+    LEFT JOIN districts d ON d.id=b.district_id
+    LEFT JOIN service_categories sc ON sc.id=b.service_category_id
+    LEFT JOIN services s ON s.id=b.service_id
+    LEFT JOIN artists a ON a.id=b.assigned_artist_id
+    ${where}
+    ORDER BY b.created_at DESC
+  `, params);
+}
 
-    res.json(result.rows);
+app.get('/api/admin/bookings', async (req, res) => {
+  try { const result = await bookingsQuery(); res.json(result.rows); }
+  catch (error) { res.status(500).json({ error: 'Failed to load bookings', details: error.message }); }
+});
+
+app.get('/api/admin/bookings/:id', async (req, res) => {
+  try {
+    const booking = await bookingsQuery(`WHERE b.id=$1`, [req.params.id]);
+    if (!booking.rows[0]) return res.status(404).json({ error: 'Booking not found' });
+    const history = await query(`SELECT * FROM booking_status_history WHERE booking_id=$1 ORDER BY created_at DESC`, [req.params.id]);
+    res.json({ booking: booking.rows[0], history: history.rows });
   } catch (error) {
-    res.status(500).json({ error: 'Failed to load bookings', details: error.message });
+    res.status(500).json({ error: 'Failed to load booking details', details: error.message });
   }
 });
 
 app.patch('/api/admin/bookings/:id/status', async (req, res) => {
   try {
-    const current = await query(
-      'SELECT status FROM bookings WHERE id = $1',
-      [req.params.id]
-    );
-
-    if (current.rows.length === 0) {
-      return res.status(404).json({ error: 'Booking not found' });
-    }
-
-    const oldStatus = current.rows[0].status;
-
-    const result = await query(
-      `UPDATE bookings
-       SET status = $1,
-           admin_notes = COALESCE($2, admin_notes),
-           updated_at = NOW()
-       WHERE id = $3
-       RETURNING *`,
-      [req.body.status, req.body.admin_notes || null, req.params.id]
-    );
-
-    await query(
-      'INSERT INTO booking_status_history (booking_id, old_status, new_status, changed_by, note) VALUES ($1,$2,$3,$4,$5)',
-      [req.params.id, oldStatus, req.body.status, 'admin', req.body.note || null]
-    );
-
+    const current = await query(`SELECT status FROM bookings WHERE id=$1`, [req.params.id]);
+    if (!current.rows[0]) return res.status(404).json({ error: 'Booking not found' });
+    const result = await query(`UPDATE bookings SET status=$1, admin_notes=COALESCE($2,admin_notes), updated_at=NOW() WHERE id=$3 RETURNING *`, [req.body.status, req.body.admin_notes || null, req.params.id]);
+    await query(`INSERT INTO booking_status_history (booking_id, old_status, new_status, changed_by, note) VALUES ($1,$2,$3,'admin',$4)`, [req.params.id, current.rows[0].status, req.body.status, nullable(req.body.note)]);
     res.json(result.rows[0]);
-  } catch (error) {
-    res.status(500).json({ error: 'Failed to update booking status', details: error.message });
-  }
+  } catch (error) { res.status(500).json({ error: 'Failed to update booking status', details: error.message }); }
 });
 
-app.get('/api/admin/artists', async (req, res) => {
+app.patch('/api/admin/bookings/:id/details', async (req, res) => {
   try {
+    const b = req.body;
     const result = await query(`
-      SELECT
-        a.*,
-        c.name_ar AS city_name,
-        COUNT(DISTINCT b.id)::int AS total_bookings,
-        COUNT(DISTINCT CASE WHEN b.status = 'completed' THEN b.id END)::int AS completed_bookings,
-        ROUND(AVG(r.overall_rating)::numeric, 1) AS review_rating,
-        COUNT(DISTINCT r.id)::int AS review_count,
-        COUNT(DISTINCT av.id)::int AS availability_slots
-      FROM artists a
-      LEFT JOIN cities c ON c.id = a.city_id
-      LEFT JOIN bookings b ON b.assigned_artist_id = a.id
-      LEFT JOIN artist_reviews r ON r.artist_id = a.id
-      LEFT JOIN artist_availability av ON av.artist_id = a.id AND av.available_date >= CURRENT_DATE
-      GROUP BY a.id, c.name_ar
-      ORDER BY a.created_at DESC
-    `);
-
-    res.json(result.rows);
-  } catch (error) {
-    res.status(500).json({ error: 'Failed to load artists', details: error.message });
-  }
+      UPDATE bookings SET estimated_price=$1, final_price=$2, deposit_amount=$3, payment_status=$4, admin_notes=$5, updated_at=NOW()
+      WHERE id=$6 RETURNING *
+    `, [b.estimated_price || null, b.final_price || null, b.deposit_amount || null, b.payment_status || 'unpaid', nullable(b.admin_notes), req.params.id]);
+    if (!result.rows[0]) return res.status(404).json({ error: 'Booking not found' });
+    await query(`INSERT INTO booking_status_history (booking_id, old_status, new_status, changed_by, note) VALUES ($1,$2,$2,'admin','تم تحديث تفاصيل الطلب')`, [req.params.id, result.rows[0].status]);
+    res.json(result.rows[0]);
+  } catch (error) { res.status(500).json({ error: 'Failed to update booking details', details: error.message }); }
 });
 
-app.post('/api/admin/artists', async (req, res) => {
+app.delete('/api/admin/bookings/:id', async (req, res) => {
   try {
-    const a = req.body;
-    const cityId = a.city_id || await findOrCreateCity(a.city);
-
-    if (!a.name || !a.phone) {
-      return res.status(400).json({ error: 'Artist name and phone are required.' });
-    }
-
-    const result = await query(`
-      INSERT INTO artists (
-        name,
-        phone,
-        city_id,
-        districts,
-        skills,
-        bio,
-        rating,
-        status
-      )
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
-      RETURNING *
-    `, [
-      normalizeText(a.name),
-      normalizePhone(a.phone),
-      cityId,
-      normalizeText(a.districts) || null,
-      normalizeText(a.skills) || null,
-      normalizeText(a.bio) || null,
-      a.rating || 5,
-      a.status || 'active'
-    ]);
-
-    res.status(201).json(result.rows[0]);
-  } catch (error) {
-    console.error('Create artist error:', error);
-    res.status(500).json({ error: 'Failed to create artist', details: error.message });
-  }
+    await query(`DELETE FROM booking_status_history WHERE booking_id=$1`, [req.params.id]);
+    await query(`DELETE FROM artist_reviews WHERE booking_id=$1`, [req.params.id]).catch(() => null);
+    await query(`DELETE FROM bookings WHERE id=$1`, [req.params.id]);
+    res.json({ ok: true, deleted_id: req.params.id });
+  } catch (error) { res.status(500).json({ error: 'Failed to delete booking', details: error.message }); }
 });
 
 app.patch('/api/admin/bookings/:id/assign-artist', async (req, res) => {
   try {
     const { artist_id, force } = req.body;
-    const { id } = req.params;
-
-    const current = await query(
-      `SELECT id, status, booking_date, booking_time, assigned_artist_id
-       FROM bookings
-       WHERE id = $1`,
-      [id]
-    );
-
-    if (current.rows.length === 0) {
-      return res.status(404).json({ error: 'Booking not found' });
-    }
-
-    const oldStatus = current.rows[0].status;
-    const newStatus = artist_id ? 'artist_assigned' : oldStatus;
-
+    const current = await query(`SELECT id, status, booking_date FROM bookings WHERE id=$1`, [req.params.id]);
+    if (!current.rows[0]) return res.status(404).json({ error: 'Booking not found' });
     if (artist_id && !force) {
-      const conflicts = await query(`
-        SELECT
-          b.id,
-          b.booking_date,
-          b.booking_time,
-          b.status,
-          c.name AS customer_name,
-          c.phone AS customer_phone,
-          s.name AS service_name
-        FROM bookings b
-        LEFT JOIN customers c ON c.id = b.customer_id
-        LEFT JOIN services s ON s.id = b.service_id
-        WHERE b.assigned_artist_id = $1
-          AND b.id <> $2
-          AND b.booking_date = $3
-          AND b.status NOT IN ('completed','cancelled','unavailable')
-        ORDER BY b.booking_time ASC
-      `, [artist_id, id, current.rows[0].booking_date]);
+      const conflicts = await query(`SELECT id, booking_date, booking_time, status FROM bookings WHERE assigned_artist_id=$1 AND id<>$2 AND booking_date=$3 AND status NOT IN ('completed','cancelled','unavailable')`, [artist_id, req.params.id, current.rows[0].booking_date]);
+      if (conflicts.rows.length) return res.status(409).json({ error: 'يوجد تعارض في جدول خبيرة التجميل لنفس اليوم.', conflict_count: conflicts.rows.length, conflicts: conflicts.rows });
+    }
+    const status = artist_id ? 'artist_assigned' : current.rows[0].status;
+    const result = await query(`UPDATE bookings SET assigned_artist_id=$1, status=$2, updated_at=NOW() WHERE id=$3 RETURNING *`, [artist_id || null, status, req.params.id]);
+    await query(`INSERT INTO booking_status_history (booking_id, old_status, new_status, changed_by, note) VALUES ($1,$2,$3,'admin',$4)`, [req.params.id, current.rows[0].status, status, artist_id ? 'تم تعيين خبيرة التجميل' : 'تم إلغاء تعيين خبيرة التجميل']);
+    res.json(result.rows[0]);
+  } catch (error) { res.status(500).json({ error: 'Failed to assign beautician', details: error.message }); }
+});
 
-      if (conflicts.rows.length > 0) {
-        return res.status(409).json({
-          error: 'يوجد تعارض في جدول الحنانة لنفس اليوم.',
-          conflict_count: conflicts.rows.length,
-          conflicts: conflicts.rows
-        });
+function activeOrAll(req) { return req.query.all === '1' ? '' : `WHERE status='active'`; }
+
+async function listRegions(all = false) {
+  return query(`SELECT * FROM regions ${all ? '' : `WHERE status='active'`} ORDER BY sort_order, name_ar`);
+}
+async function listCities(all = false) {
+  return query(`SELECT c.*, r.name_ar AS region_name FROM cities c LEFT JOIN regions r ON r.id=c.region_id ${all ? '' : `WHERE c.status='active'`} ORDER BY r.sort_order, c.sort_order, c.name_ar`);
+}
+async function listDistricts(all = false) {
+  return query(`SELECT d.*, c.name_ar AS city_name, r.name_ar AS region_name FROM districts d LEFT JOIN cities c ON c.id=d.city_id LEFT JOIN regions r ON r.id=c.region_id ${all ? '' : `WHERE d.status='active'`} ORDER BY r.sort_order, c.sort_order, d.sort_order, d.name_ar`);
+}
+async function listServiceCategories(all = false) {
+  return query(`SELECT * FROM service_categories ${all ? '' : `WHERE status='active'`} ORDER BY sort_order, name_ar`);
+}
+async function listServices(all = false) {
+  return query(`SELECT s.*, COALESCE(s.name_ar, s.name) AS display_name, sc.name_ar AS category_name FROM services s LEFT JOIN service_categories sc ON sc.id=s.category_id ${all ? '' : `WHERE s.status='active'`} ORDER BY sc.sort_order, s.sort_order, COALESCE(s.name_ar, s.name)`);
+}
+
+app.get('/api/admin/catalog', async (req, res) => {
+  try {
+    const all = req.query.all !== '0';
+    const [regions, cities, districts, categories, services] = await Promise.all([listRegions(all), listCities(all), listDistricts(all), listServiceCategories(all), listServices(all)]);
+    res.json({ regions: regions.rows, cities: cities.rows, districts: districts.rows, service_categories: categories.rows, services: services.rows });
+  } catch (error) { res.status(500).json({ error: 'Failed to load catalog', details: error.message }); }
+});
+
+function catalogRoutes(name, table, fields, listFn) {
+  app.get(`/api/admin/${name}`, async (req, res) => {
+    try { const result = await listFn(req.query.all === '1'); res.json(result.rows); }
+    catch (error) { res.status(500).json({ error: `Failed to load ${name}`, details: error.message }); }
+  });
+  app.post(`/api/admin/${name}`, async (req, res) => {
+    try {
+      const columns = fields.filter(f => req.body[f] !== undefined);
+      const values = columns.map(f => req.body[f]);
+      if (!columns.length) return res.status(400).json({ error: 'No fields sent.' });
+      const placeholders = columns.map((_, i) => `$${i + 1}`).join(',');
+      const result = await query(`INSERT INTO ${table} (${columns.join(',')}) VALUES (${placeholders}) RETURNING *`, values);
+      res.status(201).json(result.rows[0]);
+    } catch (error) { res.status(500).json({ error: `Failed to create ${name}`, details: error.message }); }
+  });
+  app.patch(`/api/admin/${name}/:id`, async (req, res) => {
+    try {
+      const columns = fields.filter(f => req.body[f] !== undefined);
+      if (!columns.length) return res.status(400).json({ error: 'No fields sent.' });
+      const sets = columns.map((f, i) => `${f}=$${i + 1}`).join(', ');
+      const values = [...columns.map(f => req.body[f]), req.params.id];
+      const result = await query(`UPDATE ${table} SET ${sets}, updated_at=NOW() WHERE id=$${values.length} RETURNING *`, values);
+      if (!result.rows[0]) return res.status(404).json({ error: 'Not found' });
+      res.json(result.rows[0]);
+    } catch (error) { res.status(500).json({ error: `Failed to update ${name}`, details: error.message }); }
+  });
+  app.patch(`/api/admin/${name}/:id/status`, async (req, res) => {
+    try {
+      const result = await query(`UPDATE ${table} SET status=$1, updated_at=NOW() WHERE id=$2 RETURNING *`, [req.body.status || 'active', req.params.id]);
+      if (!result.rows[0]) return res.status(404).json({ error: 'Not found' });
+      res.json(result.rows[0]);
+    } catch (error) { res.status(500).json({ error: `Failed to update ${name} status`, details: error.message }); }
+  });
+  app.delete(`/api/admin/${name}/:id`, async (req, res) => {
+    try {
+      await query(`UPDATE bookings SET ${table === 'regions' ? 'region_id' : table === 'cities' ? 'city_id' : table === 'districts' ? 'district_id' : table === 'service_categories' ? 'service_category_id' : 'service_id'}=NULL WHERE ${table === 'regions' ? 'region_id' : table === 'cities' ? 'city_id' : table === 'districts' ? 'district_id' : table === 'service_categories' ? 'service_category_id' : 'service_id'}=$1`, [req.params.id]).catch(() => null);
+      if (table === 'regions') await query(`UPDATE cities SET region_id=NULL WHERE region_id=$1`, [req.params.id]).catch(() => null);
+      if (table === 'cities') await query(`UPDATE districts SET city_id=NULL WHERE city_id=$1`, [req.params.id]).catch(() => null);
+      if (table === 'service_categories') await query(`UPDATE services SET category_id=NULL WHERE category_id=$1`, [req.params.id]).catch(() => null);
+      await query(`DELETE FROM ${table} WHERE id=$1`, [req.params.id]);
+      res.json({ ok: true, deleted_id: req.params.id });
+    } catch (error) { res.status(500).json({ error: `Failed to delete ${name}`, details: error.message }); }
+  });
+}
+
+catalogRoutes('regions', 'regions', ['external_id','name_ar','name_en','status','sort_order'], listRegions);
+catalogRoutes('cities', 'cities', ['region_id','external_id','name_ar','name_en','status','sort_order'], listCities);
+catalogRoutes('districts', 'districts', ['city_id','external_id','name_ar','name_en','status','sort_order'], listDistricts);
+catalogRoutes('service-categories', 'service_categories', ['name_ar','name_en','description','status','sort_order'], listServiceCategories);
+catalogRoutes('services', 'services', ['category_id','name','name_ar','name_en','description','base_price','min_price','max_price','duration_minutes','status','sort_order'], listServices);
+
+
+
+const OPEN_SAUDI_DATASET = {
+  // Primary open dataset: CC0 public-domain data, easier for commercial/testing use.
+  // Source: https://github.com/yasseralsamman/saudi-national-address
+  regions: [
+    'https://raw.githubusercontent.com/yasseralsamman/saudi-national-address/main/data/dist/regions.lite.json',
+    'https://raw.githubusercontent.com/homaily/Saudi-Arabia-Regions-Cities-and-Districts/master/json/regions_lite.json'
+  ],
+  cities: [
+    'https://raw.githubusercontent.com/yasseralsamman/saudi-national-address/main/data/dist/cities.lite.json',
+    'https://raw.githubusercontent.com/homaily/Saudi-Arabia-Regions-Cities-and-Districts/master/json/cities_lite.json',
+    'https://raw.githubusercontent.com/homaily/Saudi-Arabia-Regions-Cities-and-Districts/master/json/cities.json'
+  ],
+  districts: [
+    'https://raw.githubusercontent.com/yasseralsamman/saudi-national-address/main/data/dist/districts.lite.json',
+    'https://raw.githubusercontent.com/homaily/Saudi-Arabia-Regions-Cities-and-Districts/master/json/districts_lite.json',
+    'https://raw.githubusercontent.com/homaily/Saudi-Arabia-Regions-Cities-and-Districts/master/json/districts.json'
+  ]
+};
+
+function pickValue(row, keys) {
+  for (const key of keys) {
+    if (!row) continue;
+    if (key.includes('.')) {
+      const parts = key.split('.');
+      let current = row;
+      for (const part of parts) current = current?.[part];
+      if (current !== undefined && current !== null && current !== '') return current;
+    } else if (row[key] !== undefined && row[key] !== null && row[key] !== '') {
+      return row[key];
+    }
+  }
+  return null;
+}
+
+function normalizeOpenName(row, lang) {
+  const arKeys = ['name_ar', 'arabic_name', 'NameAr', 'nameAr', 'name.ar', 'Name.Arabic', 'name'];
+  const enKeys = ['name_en', 'english_name', 'NameEn', 'nameEn', 'name.en', 'Name.English'];
+  const value = lang === 'ar' ? pickValue(row, arKeys) : pickValue(row, enKeys);
+  if (value && typeof value === 'object') return normalizeText(value[lang] || value.ar || value.en || value.name || '');
+  return normalizeText(value);
+}
+
+function normalizeOpenDataArray(payload, kind) {
+  if (Array.isArray(payload)) return payload;
+  if (payload?.data && Array.isArray(payload.data)) return payload.data;
+  if (payload?.items && Array.isArray(payload.items)) return payload.items;
+  if (kind && payload?.[kind] && Array.isArray(payload[kind])) return payload[kind];
+  if (payload?.regions && Array.isArray(payload.regions)) return payload.regions;
+  if (payload?.cities && Array.isArray(payload.cities)) return payload.cities;
+  if (payload?.districts && Array.isArray(payload.districts)) return payload.districts;
+  return [];
+}
+
+async function fetchOpenSaudiDataset(kind) {
+  const urls = OPEN_SAUDI_DATASET[kind];
+  if (!urls) throw new Error(`Unknown Saudi dataset kind: ${kind}`);
+
+  const errors = [];
+  for (const url of urls) {
+    try {
+      const response = await fetch(url, { headers: { 'Accept': 'application/json,text/plain,*/*' } });
+      if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
+      const text = await response.text();
+      const rows = normalizeOpenDataArray(JSON.parse(text), kind);
+      if (rows.length > 0) return rows;
+      errors.push(`${url} returned 0 rows`);
+    } catch (error) {
+      errors.push(`${url}: ${error.message}`);
+    }
+  }
+
+  throw new Error(`Could not fetch Saudi open dataset ${kind}. ${errors.join(' | ')}`);
+}
+
+async function upsertOpenRegion(row, sortOrder = 0) {
+  const externalId = String(pickValue(row, ['region_id', 'regionId', 'RegionId', 'id', 'Id', 'ID', 'external_id']) ?? '').trim();
+  const nameAr = normalizeOpenName(row, 'ar');
+  const nameEn = normalizeOpenName(row, 'en') || nameAr;
+  if (!externalId || !nameAr) return null;
+
+  const existing = await query(`SELECT id FROM regions WHERE external_id=$1 LIMIT 1`, [externalId]);
+  if (existing.rows[0]) {
+    await query(`UPDATE regions SET name_ar=$1, name_en=$2, status='active', sort_order=COALESCE(NULLIF(sort_order,0),$3), updated_at=NOW() WHERE id=$4`, [nameAr, nameEn, sortOrder, existing.rows[0].id]);
+    return existing.rows[0].id;
+  }
+  const created = await query(`INSERT INTO regions (external_id, name_ar, name_en, status, sort_order) VALUES ($1,$2,$3,'active',$4) RETURNING id`, [externalId, nameAr, nameEn, sortOrder]);
+  return created.rows[0].id;
+}
+
+async function upsertOpenCity(row, regionMap, sortOrder = 0) {
+  const externalId = String(pickValue(row, ['city_id', 'cityId', 'CityId', 'id', 'Id', 'ID', 'external_id']) ?? '').trim();
+  const externalRegionId = String(pickValue(row, ['region_id', 'regionId', 'RegionId', 'region']) ?? '').trim();
+  const regionId = regionMap.get(externalRegionId) || null;
+  const nameAr = normalizeOpenName(row, 'ar');
+  const nameEn = normalizeOpenName(row, 'en') || nameAr;
+  if (!externalId || !nameAr) return null;
+
+  const existing = await query(`SELECT id FROM cities WHERE external_id=$1 LIMIT 1`, [externalId]);
+  if (existing.rows[0]) {
+    await query(`UPDATE cities SET region_id=COALESCE($1, region_id), name_ar=$2, name_en=$3, status='active', sort_order=COALESCE(NULLIF(sort_order,0),$4), updated_at=NOW() WHERE id=$5`, [regionId, nameAr, nameEn, sortOrder, existing.rows[0].id]);
+    return existing.rows[0].id;
+  }
+  const created = await query(`INSERT INTO cities (region_id, external_id, name_ar, name_en, status, sort_order) VALUES ($1,$2,$3,$4,'active',$5) RETURNING id`, [regionId, externalId, nameAr, nameEn, sortOrder]);
+  return created.rows[0].id;
+}
+
+async function upsertOpenDistrict(row, cityMap, sortOrder = 0) {
+  const externalId = String(pickValue(row, ['district_id', 'districtId', 'DistrictId', 'id', 'Id', 'ID', 'external_id']) ?? '').trim();
+  const externalCityId = String(pickValue(row, ['city_id', 'cityId', 'CityId', 'city']) ?? '').trim();
+  const cityId = cityMap.get(externalCityId) || null;
+  const nameAr = normalizeOpenName(row, 'ar');
+  const nameEn = normalizeOpenName(row, 'en') || nameAr;
+  if (!externalId || !nameAr) return null;
+
+  const existing = await query(`SELECT id FROM districts WHERE external_id=$1 LIMIT 1`, [externalId]);
+  if (existing.rows[0]) {
+    await query(`UPDATE districts SET city_id=COALESCE($1, city_id), name_ar=$2, name_en=$3, status='active', sort_order=COALESCE(NULLIF(sort_order,0),$4), updated_at=NOW() WHERE id=$5`, [cityId, nameAr, nameEn, sortOrder, existing.rows[0].id]);
+    return existing.rows[0].id;
+  }
+  const created = await query(`INSERT INTO districts (city_id, external_id, name_ar, name_en, status, sort_order) VALUES ($1,$2,$3,$4,'active',$5) RETURNING id`, [cityId, externalId, nameAr, nameEn, sortOrder]);
+  return created.rows[0].id;
+}
+
+async function importOpenSaudiLocations(mode = 'all') {
+  const summary = { regions: 0, cities: 0, districts: 0, source: 'yasseralsamman/saudi-national-address with homaily fallback' };
+  const regionMap = new Map();
+  const cityMap = new Map();
+
+  if (['regions', 'cities', 'districts', 'all'].includes(mode)) {
+    const regions = await fetchOpenSaudiDataset('regions');
+    for (let i = 0; i < regions.length; i++) {
+      const id = await upsertOpenRegion(regions[i], i + 1);
+      const externalId = String(pickValue(regions[i], ['region_id', 'regionId', 'RegionId', 'id', 'Id', 'ID', 'external_id']) ?? '').trim();
+      if (id && externalId) regionMap.set(externalId, id);
+      if (id) summary.regions++;
+    }
+  }
+
+  if (['cities', 'districts', 'all'].includes(mode)) {
+    if (regionMap.size === 0) {
+      const currentRegions = await query(`SELECT id, external_id FROM regions WHERE external_id IS NOT NULL`);
+      for (const r of currentRegions.rows) regionMap.set(String(r.external_id), r.id);
+    }
+    const cities = await fetchOpenSaudiDataset('cities');
+    for (let i = 0; i < cities.length; i++) {
+      const id = await upsertOpenCity(cities[i], regionMap, i + 1);
+      const externalId = String(pickValue(cities[i], ['city_id', 'cityId', 'CityId', 'id', 'Id', 'ID', 'external_id']) ?? '').trim();
+      if (id && externalId) cityMap.set(externalId, id);
+      if (id) summary.cities++;
+    }
+  }
+
+  if (['districts', 'all'].includes(mode)) {
+    if (cityMap.size === 0) {
+      const currentCities = await query(`SELECT id, external_id FROM cities WHERE external_id IS NOT NULL`);
+      for (const c of currentCities.rows) cityMap.set(String(c.external_id), c.id);
+    }
+    const districts = await fetchOpenSaudiDataset('districts');
+    for (let i = 0; i < districts.length; i++) {
+      const id = await upsertOpenDistrict(districts[i], cityMap, i + 1);
+      if (id) summary.districts++;
+    }
+  }
+
+  return summary;
+}
+
+async function fetchSplLookup(kind, params, apiKey) {
+  const base = `https://apina.address.gov.sa/NationalAddress/v3.1/lookup/${kind}`;
+  const search = new URLSearchParams({ language: 'A', format: 'JSON', encode: 'utf8', api_key: apiKey, ...params });
+  const response = await fetch(`${base}?${search.toString()}`);
+  if (!response.ok) throw new Error(`SPL API ${kind} failed: ${response.status}`);
+  return response.json();
+}
+
+
+app.post('/api/admin/import/saudi-open-data', async (req, res) => {
+  try {
+    const mode = req.body.mode || 'all';
+    const summary = await importOpenSaudiLocations(mode);
+    res.json({ ok: true, mode, summary });
+  } catch (error) {
+    console.error('Saudi open data import error:', error);
+    res.status(500).json({ error: 'Failed to import Saudi open location dataset', details: error.message });
+  }
+});
+
+app.post('/api/admin/import/spl', async (req, res) => {
+  try {
+    const apiKey = req.body.api_key || process.env.SPL_API_KEY;
+    const mode = req.body.mode || 'regions';
+    if (!apiKey) return res.status(400).json({ error: 'SPL api_key is required. Send api_key or set SPL_API_KEY.' });
+    const summary = { regions: 0, cities: 0, districts: 0 };
+
+    if (['regions', 'all'].includes(mode)) {
+      const data = await fetchSplLookup('regions', {}, apiKey);
+      const regions = data.Regions || data.regions || [];
+      for (const r of regions) {
+        await query(`INSERT INTO regions (external_id, name_ar, name_en, status) VALUES ($1,$2,$3,'active') ON CONFLICT (external_id) DO UPDATE SET name_ar=EXCLUDED.name_ar, updated_at=NOW()`, [String(r.Id || r.ID || r.id), r.Name || r.name, r.Name || r.name]);
+        summary.regions++;
       }
     }
 
+    if (['cities', 'all'].includes(mode)) {
+      const regionRows = req.body.region_id
+        ? (await query(`SELECT * FROM regions WHERE id=$1`, [req.body.region_id])).rows
+        : (await query(`SELECT * FROM regions WHERE external_id IS NOT NULL ORDER BY sort_order, name_ar`)).rows;
+      for (const region of regionRows) {
+        if (!region.external_id) continue;
+        const data = await fetchSplLookup('cities', { regionid: String(region.external_id) }, apiKey);
+        const cities = data.Cities || data.cities || [];
+        for (const c of cities) {
+          await query(`INSERT INTO cities (region_id, external_id, name_ar, name_en, status) VALUES ($1,$2,$3,$4,'active') ON CONFLICT DO NOTHING`, [region.id, String(c.Id || c.ID || c.id), c.Name || c.name, c.Name || c.name]);
+          await query(`UPDATE cities SET region_id=$1, name_ar=$3, updated_at=NOW() WHERE external_id=$2`, [region.id, String(c.Id || c.ID || c.id), c.Name || c.name]);
+          summary.cities++;
+        }
+      }
+    }
+
+    if (['districts'].includes(mode)) {
+      const cityId = req.body.city_id;
+      if (!cityId) return res.status(400).json({ error: 'city_id is required for districts import.' });
+      const city = await query(`SELECT * FROM cities WHERE id=$1`, [cityId]);
+      if (!city.rows[0]?.external_id) return res.status(400).json({ error: 'Selected city does not have SPL external_id.' });
+      const data = await fetchSplLookup('districts', { cityid: String(city.rows[0].external_id) }, apiKey);
+      const districts = data.Districts || data.districts || [];
+      for (const d of districts) {
+        await query(`INSERT INTO districts (city_id, external_id, name_ar, name_en, status) VALUES ($1,$2,$3,$4,'active') ON CONFLICT DO NOTHING`, [cityId, String(d.Id || d.ID || d.id), d.Name || d.name, d.Name || d.name]);
+        await query(`UPDATE districts SET city_id=$1, name_ar=$3, updated_at=NOW() WHERE external_id=$2`, [cityId, String(d.Id || d.ID || d.id), d.Name || d.name]);
+        summary.districts++;
+      }
+    }
+
+    res.json({ ok: true, mode, summary });
+  } catch (error) {
+    console.error('SPL import error:', error);
+    res.status(500).json({ error: 'Failed to import from SPL National Address API', details: error.message });
+  }
+});
+
+async function listBeauticians() {
+  return query(`
+    SELECT a.*, r.name_ar AS region_name, c.name_ar AS city_name, COALESCE(ms.name_ar, ms.name) AS main_expertise_name,
+      COUNT(DISTINCT b.id)::int AS total_bookings,
+      COUNT(DISTINCT CASE WHEN b.status='completed' THEN b.id END)::int AS completed_bookings,
+      ROUND(AVG(rv.overall_rating)::numeric,1) AS review_rating,
+      COUNT(DISTINCT rv.id)::int AS review_count,
+      COUNT(DISTINCT av.id)::int AS availability_slots
+    FROM artists a
+    LEFT JOIN regions r ON r.id=a.region_id
+    LEFT JOIN cities c ON c.id=a.city_id
+    LEFT JOIN services ms ON ms.id=a.main_expertise_service_id
+    LEFT JOIN bookings b ON b.assigned_artist_id=a.id
+    LEFT JOIN artist_reviews rv ON rv.artist_id=a.id
+    LEFT JOIN artist_availability av ON av.artist_id=a.id AND av.available_date >= CURRENT_DATE
+    GROUP BY a.id, r.name_ar, c.name_ar, ms.name_ar, ms.name
+    ORDER BY a.created_at DESC
+  `);
+}
+
+app.get(['/api/admin/artists','/api/admin/beauticians'], async (req, res) => {
+  try { const result = await listBeauticians(); res.json(result.rows); }
+  catch (error) { res.status(500).json({ error: 'Failed to load beauticians', details: error.message }); }
+});
+
+app.post(['/api/admin/artists','/api/admin/beauticians'], async (req, res) => {
+  try {
+    const a = req.body;
+    if (!a.name || !a.phone) return res.status(400).json({ error: 'Beautician name and phone are required.' });
     const result = await query(`
-      UPDATE bookings
-      SET assigned_artist_id = $1,
-          status = $2,
-          updated_at = NOW()
-      WHERE id = $3
-      RETURNING *
-    `, [artist_id || null, newStatus, id]);
-
-    await query(
-      'INSERT INTO booking_status_history (booking_id, old_status, new_status, changed_by, note) VALUES ($1,$2,$3,$4,$5)',
-      [id, oldStatus, newStatus, 'admin', artist_id ? 'تم تعيين الحنانة' : 'تم إلغاء تعيين الحنانة']
-    );
-
-    res.json(result.rows[0]);
-  } catch (error) {
-    console.error('Assign artist error:', error);
-    res.status(500).json({ error: 'Failed to assign artist', details: error.message });
-  }
-});
-
-
-
-app.get('/api/admin/bookings/:id', async (req, res) => {
-  try {
-    const booking = await query(`
-      SELECT
-        b.*,
-        c.name AS customer_name,
-        c.phone AS customer_phone,
-        city.name_ar AS city_name,
-        d.name_ar AS district_name,
-        s.name AS service_name,
-        a.name AS artist_name,
-        a.phone AS artist_phone
-      FROM bookings b
-      LEFT JOIN customers c ON c.id = b.customer_id
-      LEFT JOIN cities city ON city.id = b.city_id
-      LEFT JOIN districts d ON d.id = b.district_id
-      LEFT JOIN services s ON s.id = b.service_id
-      LEFT JOIN artists a ON a.id = b.assigned_artist_id
-      WHERE b.id = $1
-      LIMIT 1
-    `, [req.params.id]);
-
-    if (booking.rows.length === 0) {
-      return res.status(404).json({ error: 'Booking not found' });
+      INSERT INTO artists (name, phone, region_id, city_id, districts, skills, bio, rating, status, main_expertise_service_id)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *
+    `, [nullable(a.name), normalizePhone(a.phone), a.region_id || null, a.city_id || null, nullable(a.districts), nullable(a.skills), nullable(a.bio), a.rating || 5, a.status || 'active', a.main_expertise_service_id || null]);
+    if (Array.isArray(a.service_ids)) {
+      for (const serviceId of a.service_ids) {
+        await query(`INSERT INTO beautician_services (beautician_id, service_id, is_primary) VALUES ($1,$2,$3) ON CONFLICT (beautician_id, service_id) DO UPDATE SET is_primary=EXCLUDED.is_primary`, [result.rows[0].id, serviceId, serviceId === a.main_expertise_service_id]);
+      }
     }
-
-    const history = await query(`
-      SELECT *
-      FROM booking_status_history
-      WHERE booking_id = $1
-      ORDER BY created_at DESC
-    `, [req.params.id]);
-
-    res.json({ booking: booking.rows[0], history: history.rows });
-  } catch (error) {
-    console.error('Booking detail error:', error);
-    res.status(500).json({ error: 'Failed to load booking details', details: error.message });
-  }
-});
-
-app.patch('/api/admin/bookings/:id/details', async (req, res) => {
-  try {
-    const { id } = req.params;
-    const b = req.body;
-
-    const existing = await query('SELECT status FROM bookings WHERE id = $1', [id]);
-    if (existing.rows.length === 0) {
-      return res.status(404).json({ error: 'Booking not found' });
-    }
-
-    const result = await query(`
-      UPDATE bookings
-      SET
-        estimated_price = $1,
-        final_price = $2,
-        deposit_amount = $3,
-        payment_status = $4,
-        admin_notes = $5,
-        updated_at = NOW()
-      WHERE id = $6
-      RETURNING *
-    `, [
-      b.estimated_price === '' || b.estimated_price === undefined ? null : b.estimated_price,
-      b.final_price === '' || b.final_price === undefined ? null : b.final_price,
-      b.deposit_amount === '' || b.deposit_amount === undefined ? null : b.deposit_amount,
-      b.payment_status || 'unpaid',
-      normalizeText(b.admin_notes) || null,
-      id
-    ]);
-
-    await query(
-      'INSERT INTO booking_status_history (booking_id, old_status, new_status, changed_by, note) VALUES ($1,$2,$3,$4,$5)',
-      [id, existing.rows[0].status, existing.rows[0].status, 'admin', 'تم تحديث تفاصيل الطلب المالية والإدارية']
-    );
-
-    res.json(result.rows[0]);
-  } catch (error) {
-    console.error('Update booking details error:', error);
-    res.status(500).json({ error: 'Failed to update booking details', details: error.message });
-  }
-});
-
-app.delete('/api/admin/bookings/:id', async (req, res) => {
-  try {
-    const { id } = req.params;
-
-    const existing = await query('SELECT id FROM bookings WHERE id = $1', [id]);
-    if (existing.rows.length === 0) {
-      return res.status(404).json({ error: 'Booking not found' });
-    }
-
-    await query('DELETE FROM booking_status_history WHERE booking_id = $1', [id]);
-    await query('DELETE FROM bookings WHERE id = $1', [id]);
-
-    res.json({ ok: true, deleted_id: id });
-  } catch (error) {
-    console.error('Delete booking error:', error);
-    res.status(500).json({ error: 'Failed to delete booking', details: error.message });
-  }
-});
-
-app.delete('/api/admin/artists/:id', async (req, res) => {
-  try {
-    const { id } = req.params;
-
-    const existing = await query('SELECT id FROM artists WHERE id = $1', [id]);
-    if (existing.rows.length === 0) {
-      return res.status(404).json({ error: 'Artist not found' });
-    }
-
-    await query(`
-      UPDATE bookings
-      SET assigned_artist_id = NULL,
-          status = CASE WHEN status = 'artist_assigned' THEN 'confirmed' ELSE status END,
-          updated_at = NOW()
-      WHERE assigned_artist_id = $1
-    `, [id]);
-
-    await query('DELETE FROM artists WHERE id = $1', [id]);
-
-    res.json({ ok: true, deleted_id: id });
-  } catch (error) {
-    console.error('Delete artist error:', error);
-    res.status(500).json({ error: 'Failed to delete artist', details: error.message });
-  }
-});
-
-
-app.get('/api/admin/services', async (req, res) => {
-  try {
-    const result = await query('SELECT * FROM services ORDER BY created_at DESC');
-    res.json(result.rows);
-  } catch (error) {
-    console.error('Admin services list error:', error);
-    res.status(500).json({ error: 'Failed to load services', details: error.message });
-  }
-});
-
-app.post('/api/admin/services', async (req, res) => {
-  try {
-    const s = req.body;
-    const result = await query(`
-      INSERT INTO services (name, description, min_price, max_price, estimated_duration, status)
-      VALUES ($1,$2,$3,$4,$5,$6)
-      RETURNING *
-    `, [
-      normalizeText(s.name),
-      normalizeText(s.description) || null,
-      s.min_price === '' || s.min_price === undefined ? null : s.min_price,
-      s.max_price === '' || s.max_price === undefined ? null : s.max_price,
-      normalizeText(s.estimated_duration) || null,
-      s.status || 'active'
-    ]);
-
     res.status(201).json(result.rows[0]);
-  } catch (error) {
-    console.error('Create service error:', error);
-    res.status(500).json({ error: 'Failed to create service', details: error.message });
-  }
+  } catch (error) { res.status(500).json({ error: 'Failed to create beautician', details: error.message }); }
 });
 
-app.patch('/api/admin/services/:id/status', async (req, res) => {
+app.patch(['/api/admin/artists/:id','/api/admin/beauticians/:id'], async (req, res) => {
   try {
-    const { id } = req.params;
-    const { status } = req.body;
-    const result = await query(
-      'UPDATE services SET status=$1, updated_at=NOW() WHERE id=$2 RETURNING *',
-      [status || 'active', id]
-    );
-
-    if (result.rows.length === 0) return res.status(404).json({ error: 'Service not found' });
-    res.json(result.rows[0]);
-  } catch (error) {
-    console.error('Update service status error:', error);
-    res.status(500).json({ error: 'Failed to update service status', details: error.message });
-  }
-});
-
-
-app.delete('/api/admin/services/:id', async (req, res) => {
-  try {
-    const { id } = req.params;
-
-    const existing = await query('SELECT id FROM services WHERE id = $1', [id]);
-    if (existing.rows.length === 0) {
-      return res.status(404).json({ error: 'Service not found' });
+    const allowed = ['name','phone','region_id','city_id','districts','skills','bio','rating','status','main_expertise_service_id'];
+    const columns = allowed.filter(f => req.body[f] !== undefined);
+    if (!columns.length && !Array.isArray(req.body.service_ids)) return res.status(400).json({ error: 'No fields sent.' });
+    let updated = null;
+    if (columns.length) {
+      const sets = columns.map((f, i) => `${f}=$${i + 1}`).join(', ');
+      const values = columns.map(f => f === 'phone' ? normalizePhone(req.body[f]) : req.body[f]);
+      const result = await query(`UPDATE artists SET ${sets}, updated_at=NOW() WHERE id=$${values.length + 1} RETURNING *`, [...values, req.params.id]);
+      updated = result.rows[0];
     }
-
-    await query('UPDATE bookings SET service_id = NULL, updated_at = NOW() WHERE service_id = $1', [id]);
-    await query('DELETE FROM services WHERE id = $1', [id]);
-
-    res.json({ ok: true, deleted_id: id });
-  } catch (error) {
-    console.error('Delete service error:', error);
-    res.status(500).json({ error: 'Failed to delete service', details: error.message });
-  }
-});
-
-app.get('/api/admin/cities', async (req, res) => {
-  try {
-    const result = await query('SELECT * FROM cities ORDER BY created_at DESC');
-    res.json(result.rows);
-  } catch (error) {
-    console.error('Admin cities list error:', error);
-    res.status(500).json({ error: 'Failed to load cities', details: error.message });
-  }
-});
-
-app.post('/api/admin/cities', async (req, res) => {
-  try {
-    const c = req.body;
-    const result = await query(`
-      INSERT INTO cities (name_ar, name_en, status)
-      VALUES ($1,$2,$3)
-      RETURNING *
-    `, [
-      normalizeText(c.name_ar),
-      normalizeText(c.name_en) || normalizeText(c.name_ar),
-      c.status || 'active'
-    ]);
-
-    res.status(201).json(result.rows[0]);
-  } catch (error) {
-    console.error('Create city error:', error);
-    res.status(500).json({ error: 'Failed to create city', details: error.message });
-  }
-});
-
-app.patch('/api/admin/cities/:id/status', async (req, res) => {
-  try {
-    const { id } = req.params;
-    const { status } = req.body;
-    const result = await query(
-      'UPDATE cities SET status=$1, updated_at=NOW() WHERE id=$2 RETURNING *',
-      [status || 'active', id]
-    );
-
-    if (result.rows.length === 0) return res.status(404).json({ error: 'City not found' });
-    res.json(result.rows[0]);
-  } catch (error) {
-    console.error('Update city status error:', error);
-    res.status(500).json({ error: 'Failed to update city status', details: error.message });
-  }
-});
-
-
-app.delete('/api/admin/cities/:id', async (req, res) => {
-  try {
-    const { id } = req.params;
-
-    const existing = await query('SELECT id FROM cities WHERE id = $1', [id]);
-    if (existing.rows.length === 0) {
-      return res.status(404).json({ error: 'City not found' });
+    if (Array.isArray(req.body.service_ids)) {
+      await query(`DELETE FROM beautician_services WHERE beautician_id=$1`, [req.params.id]);
+      for (const serviceId of req.body.service_ids) {
+        await query(`INSERT INTO beautician_services (beautician_id, service_id, is_primary) VALUES ($1,$2,$3)`, [req.params.id, serviceId, serviceId === req.body.main_expertise_service_id]);
+      }
     }
-
-    await query(`
-      UPDATE bookings
-      SET district_id = NULL, updated_at = NOW()
-      WHERE district_id IN (SELECT id FROM districts WHERE city_id = $1)
-    `, [id]);
-    await query('UPDATE bookings SET city_id = NULL, updated_at = NOW() WHERE city_id = $1', [id]);
-    await query('UPDATE customers SET city_id = NULL, updated_at = NOW() WHERE city_id = $1', [id]);
-    await query('UPDATE artists SET city_id = NULL, updated_at = NOW() WHERE city_id = $1', [id]);
-    await query('DELETE FROM districts WHERE city_id = $1', [id]);
-    await query('DELETE FROM cities WHERE id = $1', [id]);
-
-    res.json({ ok: true, deleted_id: id });
-  } catch (error) {
-    console.error('Delete city error:', error);
-    res.status(500).json({ error: 'Failed to delete city', details: error.message });
-  }
+    res.json(updated || { ok: true });
+  } catch (error) { res.status(500).json({ error: 'Failed to update beautician', details: error.message }); }
 });
 
-app.get('/api/admin/districts', async (req, res) => {
+app.delete(['/api/admin/artists/:id','/api/admin/beauticians/:id'], async (req, res) => {
   try {
-    const result = await query(`
-      SELECT d.*, c.name_ar AS city_name
-      FROM districts d
-      LEFT JOIN cities c ON c.id = d.city_id
-      ORDER BY d.created_at DESC
-    `);
-    res.json(result.rows);
-  } catch (error) {
-    console.error('Admin districts list error:', error);
-    res.status(500).json({ error: 'Failed to load districts', details: error.message });
-  }
-});
-
-app.post('/api/admin/districts', async (req, res) => {
-  try {
-    const d = req.body;
-    let cityId = d.city_id || null;
-
-    if (!cityId && d.city) {
-      cityId = await findOrCreateCity(d.city);
-    }
-
-    if (!cityId) {
-      return res.status(400).json({ error: 'City is required for district' });
-    }
-
-    const result = await query(`
-      INSERT INTO districts (city_id, name_ar, name_en, status)
-      VALUES ($1,$2,$3,$4)
-      RETURNING *
-    `, [
-      cityId,
-      normalizeText(d.name_ar),
-      normalizeText(d.name_en) || normalizeText(d.name_ar),
-      d.status || 'active'
-    ]);
-
-    res.status(201).json(result.rows[0]);
-  } catch (error) {
-    console.error('Create district error:', error);
-    res.status(500).json({ error: 'Failed to create district', details: error.message });
-  }
-});
-
-app.patch('/api/admin/districts/:id/status', async (req, res) => {
-  try {
-    const { id } = req.params;
-    const { status } = req.body;
-    const result = await query(
-      'UPDATE districts SET status=$1, updated_at=NOW() WHERE id=$2 RETURNING *',
-      [status || 'active', id]
-    );
-
-    if (result.rows.length === 0) return res.status(404).json({ error: 'District not found' });
-    res.json(result.rows[0]);
-  } catch (error) {
-    console.error('Update district status error:', error);
-    res.status(500).json({ error: 'Failed to update district status', details: error.message });
-  }
-});
-
-
-app.delete('/api/admin/districts/:id', async (req, res) => {
-  try {
-    const { id } = req.params;
-
-    const existing = await query('SELECT id FROM districts WHERE id = $1', [id]);
-    if (existing.rows.length === 0) {
-      return res.status(404).json({ error: 'District not found' });
-    }
-
-    await query('UPDATE bookings SET district_id = NULL, updated_at = NOW() WHERE district_id = $1', [id]);
-    await query('DELETE FROM districts WHERE id = $1', [id]);
-
-    res.json({ ok: true, deleted_id: id });
-  } catch (error) {
-    console.error('Delete district error:', error);
-    res.status(500).json({ error: 'Failed to delete district', details: error.message });
-  }
-});
-
-app.get('/api/admin/calendar', async (req, res) => {
-  try {
-    const from = req.query.from || new Date().toISOString().slice(0, 10);
-    const to = req.query.to || from;
-
-    const result = await query(`
-      SELECT
-        b.id,
-        b.booking_date,
-        b.booking_time,
-        b.status,
-        b.payment_status,
-        b.final_price,
-        c.name AS customer_name,
-        c.phone AS customer_phone,
-        city.name_ar AS city_name,
-        d.name_ar AS district_name,
-        s.name AS service_name,
-        a.name AS artist_name,
-        a.phone AS artist_phone
-      FROM bookings b
-      LEFT JOIN customers c ON c.id = b.customer_id
-      LEFT JOIN cities city ON city.id = b.city_id
-      LEFT JOIN districts d ON d.id = b.district_id
-      LEFT JOIN services s ON s.id = b.service_id
-      LEFT JOIN artists a ON a.id = b.assigned_artist_id
-      WHERE b.booking_date BETWEEN $1 AND $2
-      ORDER BY b.booking_date ASC, b.booking_time ASC
-    `, [from, to]);
-
-    res.json(result.rows);
-  } catch (error) {
-    console.error('Calendar error:', error);
-    res.status(500).json({ error: 'Failed to load calendar', details: error.message });
-  }
-});
-
-
-
-// Customer mobile app catalog and booking lookup - v1.2
-app.get('/api/customer/catalog', async (req, res) => {
-  try {
-    const [cities, districts, services] = await Promise.all([
-      query("SELECT * FROM cities WHERE status='active' ORDER BY name_ar"),
-      query("SELECT d.*, c.name_ar AS city_name FROM districts d LEFT JOIN cities c ON c.id=d.city_id WHERE d.status='active' ORDER BY d.name_ar"),
-      query("SELECT * FROM services WHERE status='active' ORDER BY min_price NULLS LAST")
-    ]);
-    res.json({ cities: cities.rows, districts: districts.rows, services: services.rows });
-  } catch (error) {
-    res.status(500).json({ error: 'Failed to load customer catalog', details: error.message });
-  }
+    await query(`UPDATE bookings SET assigned_artist_id=NULL WHERE assigned_artist_id=$1`, [req.params.id]);
+    await query(`DELETE FROM beautician_services WHERE beautician_id=$1`, [req.params.id]);
+    await query(`DELETE FROM artists WHERE id=$1`, [req.params.id]);
+    res.json({ ok: true, deleted_id: req.params.id });
+  } catch (error) { res.status(500).json({ error: 'Failed to delete beautician', details: error.message }); }
 });
 
 app.get('/api/customer/bookings', async (req, res) => {
   try {
     const phone = normalizePhone(req.query.phone);
     if (!phone) return res.status(400).json({ error: 'phone is required' });
-    const result = await query(`
-      SELECT b.*, c.name AS customer_name, c.phone AS customer_phone, city.name_ar AS city_name,
-             d.name_ar AS district_name, s.name AS service_name, a.name AS artist_name
-      FROM bookings b
-      LEFT JOIN customers c ON c.id=b.customer_id
-      LEFT JOIN cities city ON city.id=b.city_id
-      LEFT JOIN districts d ON d.id=b.district_id
-      LEFT JOIN services s ON s.id=b.service_id
-      LEFT JOIN artists a ON a.id=b.assigned_artist_id
-      WHERE c.phone=$1
-      ORDER BY b.created_at DESC
-    `, [phone]);
+    const result = await bookingsQuery(`WHERE c.phone=$1`, [phone]);
     res.json(result.rows);
-  } catch (error) {
-    res.status(500).json({ error: 'Failed to load customer bookings', details: error.message });
-  }
+  } catch (error) { res.status(500).json({ error: 'Failed to load customer bookings', details: error.message }); }
 });
 
 app.get('/api/customer/bookings/:id', async (req, res) => {
   try {
     const phone = normalizePhone(req.query.phone);
     if (!phone) return res.status(400).json({ error: 'phone is required' });
-    const result = await query(`
-      SELECT b.*, c.name AS customer_name, c.phone AS customer_phone, city.name_ar AS city_name,
-             d.name_ar AS district_name, s.name AS service_name, a.name AS artist_name
-      FROM bookings b
-      LEFT JOIN customers c ON c.id=b.customer_id
-      LEFT JOIN cities city ON city.id=b.city_id
-      LEFT JOIN districts d ON d.id=b.district_id
-      LEFT JOIN services s ON s.id=b.service_id
-      LEFT JOIN artists a ON a.id=b.assigned_artist_id
-      WHERE b.id=$1 AND c.phone=$2
-      LIMIT 1
-    `, [req.params.id, phone]);
-    if (!result.rows.length) return res.status(404).json({ error: 'Booking not found' });
+    const result = await bookingsQuery(`WHERE b.id=$1 AND c.phone=$2`, [req.params.id, phone]);
+    if (!result.rows[0]) return res.status(404).json({ error: 'Booking not found' });
     res.json(result.rows[0]);
-  } catch (error) {
-    res.status(500).json({ error: 'Failed to load customer booking', details: error.message });
-  }
+  } catch (error) { res.status(500).json({ error: 'Failed to load customer booking', details: error.message }); }
 });
 
-// Mock OTP endpoints for v1.2 local testing. Replace with real SMS provider before production.
 app.post('/api/auth/request-otp', async (req, res) => {
   const phone = normalizePhone(req.body.phone);
   if (!phone) return res.status(400).json({ error: 'phone is required' });
@@ -962,154 +890,40 @@ app.post('/api/auth/verify-otp', async (req, res) => {
   res.json({ ok: true, token: `local-customer-${phone}`, phone });
 });
 
-// Lightweight image upload placeholder: accepts a data URL and returns it.
 app.post('/api/uploads/design-image', async (req, res) => {
-  try {
-    const { image_data_url } = req.body;
-    if (!image_data_url || typeof image_data_url !== 'string') {
-      return res.status(400).json({ error: 'image_data_url is required for the local placeholder upload.' });
-    }
-    res.json({ ok: true, url: image_data_url });
-  } catch (error) {
-    res.status(500).json({ error: 'Failed to upload image', details: error.message });
-  }
-});
-
-// Artist availability and review management - v1.3
-app.get('/api/admin/artists/:id/profile', async (req, res) => {
-  try {
-    const artist = await query(`
-      SELECT a.*, c.name_ar AS city_name,
-             COUNT(DISTINCT b.id)::int AS total_bookings,
-             COUNT(DISTINCT CASE WHEN b.status='completed' THEN b.id END)::int AS completed_bookings,
-             ROUND(AVG(r.overall_rating)::numeric, 1) AS review_rating,
-             COUNT(DISTINCT r.id)::int AS review_count
-      FROM artists a
-      LEFT JOIN cities c ON c.id=a.city_id
-      LEFT JOIN bookings b ON b.assigned_artist_id=a.id
-      LEFT JOIN artist_reviews r ON r.artist_id=a.id
-      WHERE a.id=$1
-      GROUP BY a.id, c.name_ar
-    `, [req.params.id]);
-    if (!artist.rows.length) return res.status(404).json({ error: 'Artist not found' });
-    const availability = await query('SELECT * FROM artist_availability WHERE artist_id=$1 ORDER BY available_date DESC, from_time ASC', [req.params.id]);
-    const reviews = await query(`
-      SELECT r.*, b.booking_date, c.name AS customer_name, s.name AS service_name
-      FROM artist_reviews r
-      LEFT JOIN bookings b ON b.id=r.booking_id
-      LEFT JOIN customers c ON c.id=b.customer_id
-      LEFT JOIN services s ON s.id=b.service_id
-      WHERE r.artist_id=$1
-      ORDER BY r.created_at DESC
-    `, [req.params.id]);
-    res.json({ artist: artist.rows[0], availability: availability.rows, reviews: reviews.rows });
-  } catch (error) {
-    res.status(500).json({ error: 'Failed to load artist profile', details: error.message });
-  }
+  const { image_data_url } = req.body;
+  if (!image_data_url || typeof image_data_url !== 'string') return res.status(400).json({ error: 'image_data_url is required.' });
+  res.json({ ok: true, url: image_data_url });
 });
 
 app.get('/api/admin/artist-availability', async (req, res) => {
-  try {
-    const artistId = req.query.artist_id;
-    const params = [];
-    let where = '';
-    if (artistId) { params.push(artistId); where = 'WHERE av.artist_id=$1'; }
-    const result = await query(`
-      SELECT av.*, a.name AS artist_name
-      FROM artist_availability av
-      LEFT JOIN artists a ON a.id=av.artist_id
-      ${where}
-      ORDER BY av.available_date DESC, av.from_time ASC
-    `, params);
-    res.json(result.rows);
-  } catch (error) {
-    res.status(500).json({ error: 'Failed to load availability', details: error.message });
-  }
+  const result = await query(`SELECT av.*, a.name AS artist_name FROM artist_availability av LEFT JOIN artists a ON a.id=av.artist_id ORDER BY av.available_date DESC, av.from_time ASC`);
+  res.json(result.rows);
 });
 
 app.post('/api/admin/artist-availability', async (req, res) => {
-  try {
-    const a = req.body;
-    if (!a.artist_id || !a.available_date) return res.status(400).json({ error: 'artist_id and available_date are required' });
-    const result = await query(`
-      INSERT INTO artist_availability (artist_id, available_date, from_time, to_time, is_available, note)
-      VALUES ($1,$2,$3,$4,$5,$6)
-      RETURNING *
-    `, [a.artist_id, a.available_date, a.from_time || null, a.to_time || null, a.is_available !== false, normalizeText(a.note) || null]);
-    res.status(201).json(result.rows[0]);
-  } catch (error) {
-    res.status(500).json({ error: 'Failed to create availability', details: error.message });
-  }
+  const a = req.body;
+  if (!a.artist_id || !a.available_date) return res.status(400).json({ error: 'artist_id and available_date are required' });
+  const result = await query(`INSERT INTO artist_availability (artist_id, available_date, from_time, to_time, is_available, note) VALUES ($1,$2,$3,$4,$5,$6) RETURNING *`, [a.artist_id, a.available_date, a.from_time || null, a.to_time || null, a.is_available !== false, nullable(a.note)]);
+  res.status(201).json(result.rows[0]);
 });
 
 app.delete('/api/admin/artist-availability/:id', async (req, res) => {
-  try {
-    await query('DELETE FROM artist_availability WHERE id=$1', [req.params.id]);
-    res.json({ ok: true, deleted_id: req.params.id });
-  } catch (error) {
-    res.status(500).json({ error: 'Failed to delete availability', details: error.message });
-  }
-});
-
-app.get('/api/admin/artist-reviews', async (req, res) => {
-  try {
-    const artistId = req.query.artist_id;
-    const params = [];
-    let where = '';
-    if (artistId) { params.push(artistId); where = 'WHERE r.artist_id=$1'; }
-    const result = await query(`
-      SELECT r.*, a.name AS artist_name, b.booking_date, c.name AS customer_name, s.name AS service_name
-      FROM artist_reviews r
-      LEFT JOIN artists a ON a.id=r.artist_id
-      LEFT JOIN bookings b ON b.id=r.booking_id
-      LEFT JOIN customers c ON c.id=b.customer_id
-      LEFT JOIN services s ON s.id=b.service_id
-      ${where}
-      ORDER BY r.created_at DESC
-    `, params);
-    res.json(result.rows);
-  } catch (error) {
-    res.status(500).json({ error: 'Failed to load artist reviews', details: error.message });
-  }
+  await query(`DELETE FROM artist_availability WHERE id=$1`, [req.params.id]);
+  res.json({ ok: true, deleted_id: req.params.id });
 });
 
 app.post('/api/admin/artist-reviews', async (req, res) => {
-  try {
-    const r = req.body;
-    if (!r.artist_id) return res.status(400).json({ error: 'artist_id is required' });
-    const scores = [r.punctuality, r.quality, r.customer_handling].map(v => Number(v || 0)).filter(v => v > 0);
-    const overall = r.overall_rating || (scores.length ? (scores.reduce((a,b)=>a+b,0)/scores.length).toFixed(1) : null);
-    const result = await query(`
-      INSERT INTO artist_reviews (artist_id, booking_id, punctuality, quality, customer_handling, overall_rating, suitable_for_brides, suitable_for_groups, note)
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
-      RETURNING *
-    `, [
-      r.artist_id,
-      r.booking_id || null,
-      r.punctuality || null,
-      r.quality || null,
-      r.customer_handling || null,
-      overall,
-      !!r.suitable_for_brides,
-      !!r.suitable_for_groups,
-      normalizeText(r.note) || null
-    ]);
-    res.status(201).json(result.rows[0]);
-  } catch (error) {
-    res.status(500).json({ error: 'Failed to create artist review', details: error.message });
-  }
+  const r = req.body;
+  if (!r.artist_id || !r.booking_id) return res.status(400).json({ error: 'artist_id and booking_id are required' });
+  const scores = [Number(r.punctuality || 0), Number(r.quality || 0), Number(r.customer_handling || 0)].filter(Boolean);
+  const overall = scores.length ? scores.reduce((a,b)=>a+b,0) / scores.length : null;
+  const result = await query(`INSERT INTO artist_reviews (artist_id, booking_id, punctuality, quality, customer_handling, overall_rating, suitable_for_brides, suitable_for_groups, note) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *`, [r.artist_id, r.booking_id, r.punctuality || null, r.quality || null, r.customer_handling || null, overall, !!r.suitable_for_brides, !!r.suitable_for_groups, nullable(r.note)]);
+  res.status(201).json(result.rows[0]);
 });
 
-app.delete('/api/admin/artist-reviews/:id', async (req, res) => {
-  try {
-    await query('DELETE FROM artist_reviews WHERE id=$1', [req.params.id]);
-    res.json({ ok: true, deleted_id: req.params.id });
-  } catch (error) {
-    res.status(500).json({ error: 'Failed to delete artist review', details: error.message });
-  }
-});
-
-if (!process.env.VERCEL) {
+const isVercel = !!process.env.VERCEL;
+if (!isVercel) {
   app.listen(PORT, () => console.log(`Beauty Home Service API running on port ${PORT}`));
 }
 

@@ -5,1561 +5,205 @@ import './style.css';
 const API = import.meta.env.VITE_API_BASE_URL || 'http://localhost:4000/api';
 
 const statusLabels = {
-  new: 'طلب جديد',
-  under_review: 'جاري المراجعة',
-  waiting_customer_confirmation: 'بانتظار تأكيد العميلة',
-  confirmed: 'تم تأكيد الحجز',
-  artist_assigned: 'تم تعيين الحنانة',
-  in_progress: 'قيد التنفيذ',
-  completed: 'مكتمل',
-  cancelled: 'ملغي',
-  unavailable: 'غير متوفر'
+  new: 'طلب جديد', under_review: 'جاري المراجعة', waiting_customer_confirmation: 'بانتظار تأكيد العميلة',
+  confirmed: 'تم تأكيد الحجز', artist_assigned: 'تم تعيين خبيرة التجميل', in_progress: 'قيد التنفيذ',
+  completed: 'مكتمل', cancelled: 'ملغي', unavailable: 'غير متوفر'
 };
+const statusOptions = Object.entries(statusLabels);
+const paymentLabels = { unpaid: 'غير مدفوع', deposit_paid: 'عربون مدفوع', paid: 'مدفوع بالكامل', refunded: 'مسترجع' };
+const paymentOptions = Object.entries(paymentLabels);
 
-const statusOptions = [
-  ['new', 'طلب جديد'],
-  ['under_review', 'جاري المراجعة'],
-  ['waiting_customer_confirmation', 'بانتظار تأكيد العميلة'],
-  ['confirmed', 'تم تأكيد الحجز'],
-  ['artist_assigned', 'تم تعيين الحنانة'],
-  ['in_progress', 'قيد التنفيذ'],
-  ['completed', 'مكتمل'],
-  ['cancelled', 'ملغي'],
-  ['unavailable', 'غير متوفر']
-];
+const emptyBooking = { name:'', phone:'', region_id:'', city_id:'', district_id:'', service_category_id:'', service_id:'', event_type:'زواج', booking_date:'', booking_time:'18:00', people_count:1, address:'', customer_notes:'' };
+const emptyBeautician = { name:'', phone:'', region_id:'', city_id:'', main_expertise_service_id:'', districts:'', skills:'', bio:'', rating:5, status:'active' };
+const emptyRegion = { name_ar:'', name_en:'', external_id:'', status:'active', sort_order:0 };
+const emptyCity = { region_id:'', name_ar:'', name_en:'', external_id:'', status:'active', sort_order:0 };
+const emptyDistrict = { city_id:'', name_ar:'', name_en:'', external_id:'', status:'active', sort_order:0 };
+const emptyCategory = { name_ar:'', name_en:'', description:'', status:'active', sort_order:0 };
+const emptyService = { category_id:'', name_ar:'', name_en:'', description:'', min_price:'', max_price:'', duration_minutes:'', status:'active', sort_order:0 };
 
-const paymentLabels = {
-  unpaid: 'غير مدفوع',
-  deposit_paid: 'عربون مدفوع',
-  paid: 'مدفوع بالكامل',
-  refunded: 'مسترجع'
-};
+function formatDate(value) { return value ? new Date(value).toLocaleDateString('ar-SA') : '-'; }
+function formatTime(value) { return value ? String(value).slice(0,5) : '-'; }
+function money(value) { return value === null || value === undefined || value === '' ? '-' : `${Number(value).toLocaleString('ar-SA')} ريال`; }
+function todayKey() { return new Date().toISOString().slice(0,10); }
+function byId(list, id) { return list.find(x => String(x.id) === String(id)); }
+function clean(obj) { return Object.fromEntries(Object.entries(obj).map(([k,v]) => [k, v === '' ? null : v])); }
+function whatsapp(phone, text) { const p = String(phone||'').replace(/[^0-9+]/g,''); const intl = p.startsWith('0') ? `966${p.slice(1)}` : p.replace(/^\+/,''); return `https://wa.me/${intl}?text=${encodeURIComponent(text)}`; }
 
-function formatDate(value) {
-  if (!value) return '-';
-
-  return new Date(value).toLocaleDateString('ar-SA', {
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit'
-  });
-}
-
-function formatMoney(value) {
-  if (value === null || value === undefined || value === '') return '-';
-  return `${Number(value).toLocaleString('ar-SA')} ريال`;
-}
-
-function formatTime(value) {
-  if (!value) return '-';
-  return String(value).slice(0, 5);
-}
-
-function getTodayKey() {
-  return new Date().toISOString().slice(0, 10);
-}
-
-function toDateKey(value) {
-  if (!value) return '';
-  return new Date(value).toISOString().slice(0, 10);
-}
-
-function cleanPhone(phone) {
-  return String(phone || '').replace(/[^0-9+]/g, '');
-}
-
-function whatsappLink(phone, text) {
-  const normalized = cleanPhone(phone);
-  if (!normalized) return '#';
-  const international = normalized.startsWith('0') ? `966${normalized.slice(1)}` : normalized.replace(/^\+/, '');
-  return `https://wa.me/${international}?text=${encodeURIComponent(text)}`;
-}
-
-function csvEscape(value) {
-  const text = String(value ?? '').replace(/"/g, '""');
-  return `"${text}"`;
-}
-
-function Card({ title, value }) {
-  return (
-    <div className="card">
-      <div className="value">{value}</div>
-      <div className="label">{title}</div>
-    </div>
-  );
-}
-
-const initialForm = {
-  name: '',
-  phone: '',
-  city: 'الرياض',
-  district: '',
-  event_type: 'زواج',
-  service_type: 'حناء عروس',
-  booking_date: '',
-  booking_time: '',
-  people_count: 1,
-  address: '',
-  customer_notes: ''
-};
-
-const initialArtistForm = {
-  name: '',
-  phone: '',
-  city: 'الرياض',
-  districts: '',
-  skills: '',
-  bio: '',
-  rating: 5,
-  status: 'active'
-};
-
-const initialAvailabilityForm = {
-  artist_id: '',
-  available_date: '',
-  from_time: '16:00',
-  to_time: '22:00',
-  is_available: true,
-  note: ''
-};
-
-const initialReviewForm = {
-  artist_id: '',
-  booking_id: '',
-  punctuality: 5,
-  quality: 5,
-  customer_handling: 5,
-  suitable_for_brides: false,
-  suitable_for_groups: false,
-  note: ''
-};
-
-const initialDetailForm = {
-  estimated_price: '',
-  final_price: '',
-  deposit_amount: '',
-  payment_status: 'unpaid',
-  admin_notes: ''
-};
-
-const initialServiceForm = {
-  name: '',
-  description: '',
-  min_price: '',
-  max_price: '',
-  estimated_duration: '',
-  status: 'active'
-};
-
-const initialCityForm = {
-  name_ar: '',
-  name_en: '',
-  status: 'active'
-};
-
-const initialDistrictForm = {
-  city_id: '',
-  name_ar: '',
-  name_en: '',
-  status: 'active'
-};
-
-async function fetchJson(url, options) {
-  const response = await fetch(url, options);
-  const contentType = response.headers.get('content-type') || '';
-  const data = contentType.includes('application/json') ? await response.json() : null;
-
-  if (!response.ok) {
-    throw new Error(data?.error || data?.details || `Request failed: ${response.status}`);
-  }
-
-  return data;
-}
+function Card({ title, value }) { return <div className="card"><div className="value">{value}</div><div className="label">{title}</div></div>; }
+function Field({ label, children }) { return <label className="field"><span>{label}</span>{children}</label>; }
+function TextInput({ value, onChange, placeholder, type='text', required=false }) { return <input type={type} value={value ?? ''} placeholder={placeholder} required={required} onChange={e=>onChange(e.target.value)} />; }
+function Select({ value, onChange, children, required=false }) { return <select value={value ?? ''} required={required} onChange={e=>onChange(e.target.value)}>{children}</select>; }
+function OptionList({ items, label='name_ar', empty='اختر' }) { return <><option value="">{empty}</option>{items.map(i => <option key={i.id} value={i.id}>{i[label] || i.display_name || i.name || i.name_ar}</option>)}</>; }
 
 function App() {
   const [dashboard, setDashboard] = useState({});
   const [bookings, setBookings] = useState([]);
-  const [artists, setArtists] = useState([]);
-  const [form, setForm] = useState(initialForm);
-  const [artistForm, setArtistForm] = useState(initialArtistForm);
-  const [savingBooking, setSavingBooking] = useState(false);
-  const [savingArtist, setSavingArtist] = useState(false);
-  const [availability, setAvailability] = useState([]);
-  const [reviews, setReviews] = useState([]);
-  const [availabilityForm, setAvailabilityForm] = useState(initialAvailabilityForm);
-  const [reviewForm, setReviewForm] = useState(initialReviewForm);
-  const [savingArtistOps, setSavingArtistOps] = useState(false);
+  const [beauticians, setBeauticians] = useState([]);
+  const [catalog, setCatalog] = useState({ regions:[], cities:[], districts:[], service_categories:[], services:[] });
+  const [bookingForm, setBookingForm] = useState(emptyBooking);
+  const [beauticianForm, setBeauticianForm] = useState(emptyBeautician);
+  const [editing, setEditing] = useState({ type:null, id:null });
   const [message, setMessage] = useState('');
-  const [selectedBooking, setSelectedBooking] = useState(null);
-  const [bookingHistory, setBookingHistory] = useState([]);
-  const [detailForm, setDetailForm] = useState(initialDetailForm);
-  const [savingDetails, setSavingDetails] = useState(false);
-  const [services, setServices] = useState([]);
-  const [cities, setCities] = useState([]);
-  const [districts, setDistricts] = useState([]);
-  const [serviceForm, setServiceForm] = useState(initialServiceForm);
-  const [cityForm, setCityForm] = useState(initialCityForm);
-  const [districtForm, setDistrictForm] = useState(initialDistrictForm);
-  const [savingCatalog, setSavingCatalog] = useState(false);
-  const [filters, setFilters] = useState({
-    search: '',
-    status: 'all',
-    payment_status: 'all',
-    city: 'all',
-    artist: 'all'
-  });
-  const [calendarDate, setCalendarDate] = useState(getTodayKey());
+  const [splKey, setSplKey] = useState('');
+  const [splMode, setSplMode] = useState('regions');
+  const [splRegionId, setSplRegionId] = useState('');
+  const [splCityId, setSplCityId] = useState('');
+  const [filters, setFilters] = useState({ q:'', status:'', payment:'', region_id:'', city_id:'', beautician_id:'' });
 
-  const activeArtistsCount = useMemo(
-    () => artists.filter(a => a.status === 'active').length,
-    [artists]
-  );
-
-  const filteredBookings = useMemo(() => {
-    const text = filters.search.trim().toLowerCase();
-
-    return bookings.filter(b => {
-      const matchesText = !text || [
-        b.customer_name,
-        b.customer_phone,
-        b.city_name,
-        b.service_name,
-        b.artist_name,
-        b.address,
-        b.customer_notes
-      ].some(value => String(value || '').toLowerCase().includes(text));
-
-      const matchesStatus = filters.status === 'all' || b.status === filters.status;
-      const matchesPayment = filters.payment_status === 'all' || b.payment_status === filters.payment_status;
-      const matchesCity = filters.city === 'all' || b.city_name === filters.city;
-      const matchesArtist = filters.artist === 'all' || b.assigned_artist_id === filters.artist;
-
-      return matchesText && matchesStatus && matchesPayment && matchesCity && matchesArtist;
-    });
-  }, [bookings, filters]);
-
-  const operationalMetrics = useMemo(() => {
-    const todayKey = getTodayKey();
-    return {
-      today: bookings.filter(b => toDateKey(b.booking_date) === todayKey && !['cancelled', 'unavailable'].includes(b.status)).length,
-      unassigned: bookings.filter(b => !b.assigned_artist_id && !['completed', 'cancelled', 'unavailable'].includes(b.status)).length,
-      unpaid: bookings.filter(b => (b.payment_status || 'unpaid') !== 'paid' && !['cancelled', 'unavailable'].includes(b.status)).length
-    };
-  }, [bookings]);
-
-  const calendarBookings = useMemo(() => {
-    return bookings
-      .filter(b => toDateKey(b.booking_date) === calendarDate)
-      .sort((a, b) => String(a.booking_time || '').localeCompare(String(b.booking_time || '')));
-  }, [bookings, calendarDate]);
-
-  const cityFilterOptions = useMemo(() => {
-    return [...new Set(bookings.map(b => b.city_name).filter(Boolean))];
-  }, [bookings]);
-
-  function handleFilterChange(e) {
-    const { name, value } = e.target;
-    setFilters(prev => ({ ...prev, [name]: value }));
-  }
-
-  function resetFilters() {
-    setFilters({
-      search: '',
-      status: 'all',
-      payment_status: 'all',
-      city: 'all',
-      artist: 'all'
-    });
+  async function api(path, options={}) {
+    const res = await fetch(`${API}${path}`, { headers:{ 'Content-Type':'application/json; charset=utf-8' }, ...options });
+    const data = await res.json().catch(() => null);
+    if (!res.ok) throw new Error(data?.error || data?.details || 'Request failed');
+    return data;
   }
 
   async function load() {
-    setMessage('');
-
     try {
-      const d = await fetchJson(`${API}/admin/dashboard`);
-      const b = await fetchJson(`${API}/admin/bookings`);
-
-      setDashboard(d || {});
-      setBookings(Array.isArray(b) ? b : []);
-
-      try {
-        const a = await fetchJson(`${API}/admin/artists`);
-        setArtists(Array.isArray(a) ? a : []);
-      } catch (artistError) {
-        console.warn('Artists endpoint is not available yet:', artistError);
-        setArtists([]);
-      }
-
-      try {
-        const [svc, cts, dts] = await Promise.all([
-          fetchJson(`${API}/admin/services`),
-          fetchJson(`${API}/admin/cities`),
-          fetchJson(`${API}/admin/districts`)
-        ]);
-        setServices(Array.isArray(svc) ? svc : []);
-        setCities(Array.isArray(cts) ? cts : []);
-        setDistricts(Array.isArray(dts) ? dts : []);
-      } catch (catalogError) {
-        console.warn('Catalog endpoints are not available yet:', catalogError);
-        setServices([]);
-        setCities([]);
-        setDistricts([]);
-      }
-
-      try {
-        const [av, rv] = await Promise.all([
-          fetchJson(`${API}/admin/artist-availability`),
-          fetchJson(`${API}/admin/artist-reviews`)
-        ]);
-        setAvailability(Array.isArray(av) ? av : []);
-        setReviews(Array.isArray(rv) ? rv : []);
-      } catch (artistOpsError) {
-        console.warn('v1.3 artist ops endpoints are not available yet:', artistOpsError);
-        setAvailability([]);
-        setReviews([]);
-      }
-    } catch (e) {
-      console.error(e);
-      setMessage('تعذر تحميل البيانات. تأكد أن Backend يعمل على المنفذ 4000.');
-    }
+      const [d, b, c, a] = await Promise.all([
+        api('/admin/dashboard'), api('/admin/bookings'), api('/admin/catalog?all=1'), api('/admin/beauticians')
+      ]);
+      setDashboard(d); setBookings(Array.isArray(b)?b:[]); setCatalog(c); setBeauticians(Array.isArray(a)?a:[]);
+    } catch(e) { setMessage(`خطأ تحميل البيانات: ${e.message}`); }
   }
+  useEffect(()=>{ load(); }, []);
 
-  async function updateStatus(id, status) {
-    try {
-      await fetchJson(`${API}/admin/bookings/${id}/status`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json; charset=utf-8' },
-        body: JSON.stringify({ status })
-      });
+  const citiesForBooking = catalog.cities.filter(c => !bookingForm.region_id || c.region_id === bookingForm.region_id);
+  const districtsForBooking = catalog.districts.filter(d => !bookingForm.city_id || d.city_id === bookingForm.city_id);
+  const servicesForBooking = catalog.services.filter(s => !bookingForm.service_category_id || s.category_id === bookingForm.service_category_id);
+  const citiesForBeautician = catalog.cities.filter(c => !beauticianForm.region_id || c.region_id === beauticianForm.region_id);
+  const filteredBookings = useMemo(() => bookings.filter(b => {
+    const q = filters.q.trim().toLowerCase();
+    if (q && ![b.customer_name,b.customer_phone,b.region_name,b.city_name,b.district_name,b.service_name,b.artist_name].some(v => String(v||'').toLowerCase().includes(q))) return false;
+    if (filters.status && b.status !== filters.status) return false;
+    if (filters.payment && (b.payment_status || 'unpaid') !== filters.payment) return false;
+    if (filters.region_id && b.region_id !== filters.region_id) return false;
+    if (filters.city_id && b.city_id !== filters.city_id) return false;
+    if (filters.beautician_id && b.assigned_artist_id !== filters.beautician_id) return false;
+    return true;
+  }), [bookings, filters]);
 
-      await load();
-    } catch (e) {
-      console.error(e);
-      setMessage(`تعذر تحديث حالة الطلب: ${e.message}`);
-    }
+  function setBooking(key, value) {
+    setBookingForm(prev => {
+      const next = { ...prev, [key]: value };
+      if (key === 'region_id') { next.city_id=''; next.district_id=''; }
+      if (key === 'city_id') next.district_id='';
+      if (key === 'service_category_id') next.service_id='';
+      return next;
+    });
   }
-
-  async function assignArtist(bookingId, artistId, force = false) {
-    try {
-      await fetchJson(`${API}/admin/bookings/${bookingId}/assign-artist`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json; charset=utf-8' },
-        body: JSON.stringify({ artist_id: artistId || null, force })
-      });
-
-      await load();
-    } catch (e) {
-      console.error(e);
-
-      const isConflict = String(e.message || '').includes('تعارض');
-      if (artistId && isConflict) {
-        const confirmed = window.confirm('تنبيه: توجد طلبات أخرى لنفس الحنانة في نفس اليوم. هل تريد التعيين رغم ذلك؟');
-        if (confirmed) {
-          return assignArtist(bookingId, artistId, true);
-        }
-      }
-
-      setMessage(`تعذر تعيين الحنانة: ${e.message}`);
-    }
+  function setBeautician(key, value) {
+    setBeauticianForm(prev => {
+      const next = { ...prev, [key]: value };
+      if (key === 'region_id') next.city_id='';
+      return next;
+    });
   }
-
-  function exportBookingsCsv() {
-    const header = ['رقم', 'العميلة', 'الجوال', 'المدينة', 'الخدمة', 'الحنانة', 'السعر النهائي', 'الدفع', 'التاريخ', 'الوقت', 'الحالة'];
-    const rows = filteredBookings.map((b, index) => [
-      index + 1,
-      b.customer_name || '',
-      b.customer_phone || '',
-      b.city_name || '',
-      b.service_name || '',
-      b.artist_name || '',
-      b.final_price || '',
-      paymentLabels[b.payment_status] || b.payment_status || '',
-      formatDate(b.booking_date),
-      formatTime(b.booking_time),
-      statusLabels[b.status] || b.status || ''
-    ]);
-
-    const csv = [header, ...rows].map(row => row.map(csvEscape).join(',')).join('\n');
-    const blob = new Blob([`\uFEFF${csv}`], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = `beauty-bookings-${getTodayKey()}.csv`;
-    link.click();
-    URL.revokeObjectURL(url);
-  }
-
-
-  async function deleteBooking(id, customerName) {
-    const label = customerName || 'هذا الطلب';
-    const confirmed = window.confirm(`هل تريد حذف طلب ${label}؟ لا يمكن التراجع عن هذه العملية.`);
-    if (!confirmed) return;
-
-    try {
-      await fetchJson(`${API}/admin/bookings/${id}`, {
-        method: 'DELETE'
-      });
-
-      setMessage('تم حذف الطلب بنجاح.');
-      await load();
-    } catch (e) {
-      console.error(e);
-      setMessage(`تعذر حذف الطلب: ${e.message}`);
-    }
-  }
-
-  async function deleteArtist(id, artistName) {
-    const label = artistName || 'هذه الحنانة';
-    const confirmed = window.confirm(`هل تريد حذف ${label}؟ سيتم إزالة تعيينها من أي طلب مرتبط.`);
-    if (!confirmed) return;
-
-    try {
-      await fetchJson(`${API}/admin/artists/${id}`, {
-        method: 'DELETE'
-      });
-
-      setMessage('تم حذف الحنانة بنجاح.');
-      await load();
-    } catch (e) {
-      console.error(e);
-      setMessage(`تعذر حذف الحنانة: ${e.message}`);
-    }
-  }
-
-  function handleChange(e) {
-    const { name, value } = e.target;
-
-    setForm(prev => ({
-      ...prev,
-      [name]: name === 'people_count' ? Number(value) : value
-    }));
-  }
-
-  function handleArtistChange(e) {
-    const { name, value } = e.target;
-
-    setArtistForm(prev => ({
-      ...prev,
-      [name]: name === 'rating' ? Number(value) : value
-    }));
-  }
-
   async function createBooking(e) {
-    e.preventDefault();
-    setSavingBooking(true);
-    setMessage('');
-
+    e.preventDefault(); setMessage('');
+    try { await api('/bookings', { method:'POST', body: JSON.stringify(clean(bookingForm)) }); setBookingForm(emptyBooking); setMessage('تم إنشاء الطلب.'); await load(); }
+    catch(e) { setMessage(`تعذر إنشاء الطلب: ${e.message}`); }
+  }
+  async function saveBeautician(e) {
+    e.preventDefault(); setMessage('');
     try {
-      await fetchJson(`${API}/bookings`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json; charset=utf-8' },
-        body: JSON.stringify(form)
-      });
+      const payload = clean(beauticianForm);
+      if (editing.type === 'beautician') await api(`/admin/beauticians/${editing.id}`, { method:'PATCH', body: JSON.stringify(payload) });
+      else await api('/admin/beauticians', { method:'POST', body: JSON.stringify(payload) });
+      setBeauticianForm(emptyBeautician); setEditing({}); setMessage('تم حفظ خبيرة التجميل.'); await load();
+    } catch(e) { setMessage(`تعذر حفظ خبيرة التجميل: ${e.message}`); }
+  }
+  async function deleteItem(path, id, label='العنصر') {
+    if (!confirm(`تأكيد حذف ${label}؟`)) return;
+    try { await api(`${path}/${id}`, { method:'DELETE' }); setMessage('تم الحذف.'); await load(); }
+    catch(e) { setMessage(`تعذر الحذف: ${e.message}`); }
+  }
+  async function updateStatus(id, status) { await api(`/admin/bookings/${id}/status`, { method:'PATCH', body: JSON.stringify({ status }) }); await load(); }
+  async function assignBeautician(id, artist_id) { try { await api(`/admin/bookings/${id}/assign-artist`, { method:'PATCH', body: JSON.stringify({ artist_id: artist_id || null }) }); await load(); } catch(e) { if (confirm(`${e.message}\nهل تريد التعيين رغم التعارض؟`)) { await api(`/admin/bookings/${id}/assign-artist`, { method:'PATCH', body: JSON.stringify({ artist_id, force:true }) }); await load(); } } }
 
-      setForm(initialForm);
-      setMessage('تم إنشاء الطلب بنجاح.');
+  async function importSaudiOpenData() {
+    const confirmed = confirm('سيتم استيراد بيانات المناطق والمدن والأحياء من مصدر GitHub المفتوح كبيانات تجريبية. قد يستغرق الاستيراد عدة دقائق. هل تريد المتابعة؟');
+    if (!confirmed) return;
+    try {
+      setMessage('جاري استيراد بيانات السعودية الجاهزة...');
+      const data = await api('/admin/import/saudi-open-data', { method:'POST', body: JSON.stringify({ mode: 'all' }) });
+      setMessage(`تم استيراد بيانات السعودية الجاهزة: مناطق ${data.summary?.regions||0}, مدن ${data.summary?.cities||0}, أحياء ${data.summary?.districts||0}`);
       await load();
-    } catch (e) {
-      console.error(e);
-      setMessage(`خطأ في إنشاء الطلب: ${e.message}`);
-    } finally {
-      setSavingBooking(false);
-    }
+    } catch(e) { setMessage(`تعذر استيراد بيانات السعودية الجاهزة: ${e.message}`); }
   }
 
-  async function createArtist(e) {
-    e.preventDefault();
-    setSavingArtist(true);
-    setMessage('');
-
+  async function importSpl() {
     try {
-      await fetchJson(`${API}/admin/artists`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json; charset=utf-8' },
-        body: JSON.stringify(artistForm)
-      });
-
-      setArtistForm(initialArtistForm);
-      setMessage('تمت إضافة الحنانة بنجاح.');
-      await load();
-    } catch (e) {
-      console.error(e);
-      setMessage(`خطأ في إضافة الحنانة: ${e.message}`);
-    } finally {
-      setSavingArtist(false);
-    }
+      const data = await api('/admin/import/spl', { method:'POST', body: JSON.stringify({ api_key: splKey || undefined, mode: splMode, region_id: splRegionId || undefined, city_id: splCityId || undefined }) });
+      setMessage(`تم الاستيراد من SPL: مناطق ${data.summary?.regions||0}, مدن ${data.summary?.cities||0}, أحياء ${data.summary?.districts||0}`); await load();
+    } catch(e) { setMessage(`تعذر الاستيراد من SPL: ${e.message}`); }
   }
 
-
-  async function openBookingDetails(bookingId) {
-    try {
-      const data = await fetchJson(`${API}/admin/bookings/${bookingId}`);
-      const booking = data.booking;
-
-      setSelectedBooking(booking);
-      setBookingHistory(Array.isArray(data.history) ? data.history : []);
-      setDetailForm({
-        estimated_price: booking.estimated_price ?? '',
-        final_price: booking.final_price ?? '',
-        deposit_amount: booking.deposit_amount ?? '',
-        payment_status: booking.payment_status || 'unpaid',
-        admin_notes: booking.admin_notes || ''
-      });
-    } catch (e) {
-      console.error(e);
-      setMessage(`تعذر فتح تفاصيل الطلب: ${e.message}`);
-    }
-  }
-
-  function closeBookingDetails() {
-    setSelectedBooking(null);
-    setBookingHistory([]);
-    setDetailForm(initialDetailForm);
-  }
-
-  function handleDetailChange(e) {
-    const { name, value } = e.target;
-    setDetailForm(prev => ({ ...prev, [name]: value }));
-  }
-
-  async function saveBookingDetails(e) {
-    e.preventDefault();
-    if (!selectedBooking) return;
-
-    setSavingDetails(true);
-    setMessage('');
-
-    try {
-      await fetchJson(`${API}/admin/bookings/${selectedBooking.id}/details`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json; charset=utf-8' },
-        body: JSON.stringify(detailForm)
-      });
-
-      setMessage('تم حفظ تفاصيل الطلب بنجاح.');
-      await load();
-      await openBookingDetails(selectedBooking.id);
-    } catch (e) {
-      console.error(e);
-      setMessage(`تعذر حفظ تفاصيل الطلب: ${e.message}`);
-    } finally {
-      setSavingDetails(false);
-    }
-  }
-
-
-  function handleServiceChange(e) {
-    const { name, value } = e.target;
-    setServiceForm(prev => ({ ...prev, [name]: value }));
-  }
-
-  function handleCityChange(e) {
-    const { name, value } = e.target;
-    setCityForm(prev => ({ ...prev, [name]: value }));
-  }
-
-  function handleDistrictChange(e) {
-    const { name, value } = e.target;
-    setDistrictForm(prev => ({ ...prev, [name]: value }));
-  }
-
-  async function createService(e) {
-    e.preventDefault();
-    setSavingCatalog(true);
-    setMessage('');
-
-    try {
-      await fetchJson(`${API}/admin/services`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json; charset=utf-8' },
-        body: JSON.stringify(serviceForm)
-      });
-      setServiceForm(initialServiceForm);
-      setMessage('تمت إضافة الخدمة بنجاح.');
-      await load();
-    } catch (e) {
-      console.error(e);
-      setMessage(`تعذر إضافة الخدمة: ${e.message}`);
-    } finally {
-      setSavingCatalog(false);
-    }
-  }
-
-  async function createCity(e) {
-    e.preventDefault();
-    setSavingCatalog(true);
-    setMessage('');
-
-    try {
-      await fetchJson(`${API}/admin/cities`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json; charset=utf-8' },
-        body: JSON.stringify(cityForm)
-      });
-      setCityForm(initialCityForm);
-      setMessage('تمت إضافة المدينة بنجاح.');
-      await load();
-    } catch (e) {
-      console.error(e);
-      setMessage(`تعذر إضافة المدينة: ${e.message}`);
-    } finally {
-      setSavingCatalog(false);
-    }
-  }
-
-  async function createDistrict(e) {
-    e.preventDefault();
-    setSavingCatalog(true);
-    setMessage('');
-
-    try {
-      await fetchJson(`${API}/admin/districts`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json; charset=utf-8' },
-        body: JSON.stringify(districtForm)
-      });
-      setDistrictForm(initialDistrictForm);
-      setMessage('تمت إضافة الحي بنجاح.');
-      await load();
-    } catch (e) {
-      console.error(e);
-      setMessage(`تعذر إضافة الحي: ${e.message}`);
-    } finally {
-      setSavingCatalog(false);
-    }
-  }
-
-  async function updateCatalogStatus(type, id, status) {
-    try {
-      await fetchJson(`${API}/admin/${type}/${id}/status`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json; charset=utf-8' },
-        body: JSON.stringify({ status })
-      });
-      await load();
-    } catch (e) {
-      console.error(e);
-      setMessage(`تعذر تحديث الحالة: ${e.message}`);
-    }
-  }
-
-
-  async function deleteCatalogItem(type, id, label) {
-    const typeLabel = type === 'services' ? 'الخدمة' : type === 'cities' ? 'المدينة' : 'الحي';
-    if (!window.confirm(`هل تريد حذف ${typeLabel}: ${label || ''}؟`)) return;
-
-    try {
-      await fetchJson(`${API}/admin/${type}/${id}`, {
-        method: 'DELETE'
-      });
-      setMessage(`تم حذف ${typeLabel} بنجاح.`);
-      await load();
-    } catch (e) {
-      console.error(e);
-      setMessage(`تعذر حذف ${typeLabel}: ${e.message}`);
-    }
-  }
-
-  function handleAvailabilityChange(e) {
-    const { name, value, type, checked } = e.target;
-    setAvailabilityForm(prev => ({
-      ...prev,
-      [name]: type === 'checkbox' ? checked : value
-    }));
-  }
-
-  function handleReviewChange(e) {
-    const { name, value, type, checked } = e.target;
-    setReviewForm(prev => ({
-      ...prev,
-      [name]: type === 'checkbox' ? checked : (['punctuality', 'quality', 'customer_handling'].includes(name) ? Number(value) : value)
-    }));
-  }
-
-  async function createAvailability(e) {
-    e.preventDefault();
-    setSavingArtistOps(true);
-    setMessage('');
-    try {
-      await fetchJson(`${API}/admin/artist-availability`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json; charset=utf-8' },
-        body: JSON.stringify(availabilityForm)
-      });
-      setAvailabilityForm(initialAvailabilityForm);
-      setMessage('تمت إضافة توفر الحنانة بنجاح.');
-      await load();
-    } catch (e) {
-      console.error(e);
-      setMessage(`تعذر إضافة التوفر: ${e.message}`);
-    } finally {
-      setSavingArtistOps(false);
-    }
-  }
-
-  async function deleteAvailability(id) {
-    if (!window.confirm('هل تريد حذف سجل التوفر؟')) return;
-    try {
-      await fetchJson(`${API}/admin/artist-availability/${id}`, { method: 'DELETE' });
-      setMessage('تم حذف سجل التوفر.');
-      await load();
-    } catch (e) {
-      console.error(e);
-      setMessage(`تعذر حذف التوفر: ${e.message}`);
-    }
-  }
-
-  async function createReview(e) {
-    e.preventDefault();
-    setSavingArtistOps(true);
-    setMessage('');
-    try {
-      await fetchJson(`${API}/admin/artist-reviews`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json; charset=utf-8' },
-        body: JSON.stringify(reviewForm)
-      });
-      setReviewForm(initialReviewForm);
-      setMessage('تمت إضافة تقييم الحنانة بنجاح.');
-      await load();
-    } catch (e) {
-      console.error(e);
-      setMessage(`تعذر إضافة التقييم: ${e.message}`);
-    } finally {
-      setSavingArtistOps(false);
-    }
-  }
-
-  async function deleteReview(id) {
-    if (!window.confirm('هل تريد حذف تقييم الحنانة؟')) return;
-    try {
-      await fetchJson(`${API}/admin/artist-reviews/${id}`, { method: 'DELETE' });
-      setMessage('تم حذف التقييم.');
-      await load();
-    } catch (e) {
-      console.error(e);
-      setMessage(`تعذر حذف التقييم: ${e.message}`);
-    }
-  }
-
-  useEffect(() => {
-    load();
-  }, []);
-
-  return (
-    <main dir="rtl">
-      <header className="header">
-        <div>
-          <h1>لوحة إدارة Beauty Home Service</h1>
-          <p>إدارة الطلبات والحنانات والخدمات</p>
-        </div>
-        <button onClick={load}>تحديث</button>
-      </header>
-
-      <section className="cards cards-v11">
-        <Card title="كل الطلبات" value={dashboard.total_bookings ?? bookings.length ?? 0} />
-        <Card title="طلبات اليوم" value={dashboard.today_bookings ?? operationalMetrics.today} />
-        <Card title="بدون حنانة" value={dashboard.unassigned_bookings ?? operationalMetrics.unassigned} />
-        <Card title="غير مدفوعة" value={dashboard.unpaid_bookings ?? operationalMetrics.unpaid} />
-        <Card title="طلبات جديدة" value={dashboard.new_bookings ?? bookings.filter(b => b.status === 'new').length} />
-        <Card title="حنانات فعالات" value={dashboard.active_artists ?? activeArtistsCount} />
-      </section>
-
-      <section className="panel">
-        <div className="panel-title-row">
-          <div>
-            <h2>تقويم الطلبات</h2>
-            <p className="muted">عرض سريع للطلبات حسب اليوم مع الوقت والحنانة والحالة</p>
-          </div>
-          <div className="calendar-controls">
-            <input type="date" value={calendarDate} onChange={e => setCalendarDate(e.target.value)} />
-            <button className="secondary-btn" onClick={() => setCalendarDate(getTodayKey())}>اليوم</button>
-          </div>
-        </div>
-
-        <div className="calendar-list">
-          {calendarBookings.map(item => (
-            <div className="calendar-item" key={item.id}>
-              <strong>{formatTime(item.booking_time)}</strong>
-              <span>{item.customer_name || '-'} — {item.service_name || '-'}</span>
-              <small>{item.artist_name || 'بدون حنانة'} • {statusLabels[item.status] || item.status}</small>
-              <button className="secondary-btn small-btn" onClick={() => openBookingDetails(item.id)}>تفاصيل</button>
-            </div>
-          ))}
-
-          {calendarBookings.length === 0 && <p className="empty">لا توجد طلبات في هذا اليوم</p>}
-        </div>
-      </section>
-
-      {message && <div className="message global-message">{message}</div>}
-
-
-      <section className="panel">
-        <div className="panel-title-row">
-          <div>
-            <h2>إدارة الخدمات والمدن والأحياء</h2>
-            <p className="muted">تعريف الخدمات والمناطق التي تظهر في نماذج الحجز</p>
-          </div>
-        </div>
-
-        <div className="catalog-grid">
-          <div className="catalog-box">
-            <h3>إضافة خدمة</h3>
-            <form className="mini-form" onSubmit={createService}>
-              <input name="name" value={serviceForm.name} onChange={handleServiceChange} placeholder="اسم الخدمة" required />
-              <input name="description" value={serviceForm.description} onChange={handleServiceChange} placeholder="وصف مختصر" />
-              <div className="mini-row">
-                <input type="number" min="0" name="min_price" value={serviceForm.min_price} onChange={handleServiceChange} placeholder="السعر من" />
-                <input type="number" min="0" name="max_price" value={serviceForm.max_price} onChange={handleServiceChange} placeholder="السعر إلى" />
-              </div>
-              <input name="estimated_duration" value={serviceForm.estimated_duration} onChange={handleServiceChange} placeholder="المدة التقريبية" />
-              <button type="submit" disabled={savingCatalog}>{savingCatalog ? 'جاري الحفظ...' : 'إضافة خدمة'}</button>
-            </form>
-
-            <table className="small-table compact-table">
-              <thead><tr><th>الخدمة</th><th>السعر</th><th>الحالة</th><th>إجراء</th></tr></thead>
-              <tbody>
-                {services.map(svc => (
-                  <tr key={svc.id}>
-                    <td>{svc.name}</td>
-                    <td>{formatMoney(svc.min_price)} - {formatMoney(svc.max_price)}</td>
-                    <td>{svc.status === 'active' ? 'فعالة' : 'موقوفة'}</td>
-                    <td>
-                      <button className="secondary-btn small-btn" onClick={() => updateCatalogStatus('services', svc.id, svc.status === 'active' ? 'inactive' : 'active')}>
-                        {svc.status === 'active' ? 'إيقاف' : 'تفعيل'}
-                      </button>
-                      <button className="danger-btn small-btn" onClick={() => deleteCatalogItem('services', svc.id, svc.name)}>
-                        حذف
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-
-          <div className="catalog-box">
-            <h3>إضافة مدينة</h3>
-            <form className="mini-form" onSubmit={createCity}>
-              <input name="name_ar" value={cityForm.name_ar} onChange={handleCityChange} placeholder="اسم المدينة عربي" required />
-              <input name="name_en" value={cityForm.name_en} onChange={handleCityChange} placeholder="اسم المدينة إنجليزي" />
-              <button type="submit" disabled={savingCatalog}>{savingCatalog ? 'جاري الحفظ...' : 'إضافة مدينة'}</button>
-            </form>
-
-            <table className="small-table compact-table">
-              <thead><tr><th>المدينة</th><th>EN</th><th>الحالة</th><th>إجراء</th></tr></thead>
-              <tbody>
-                {cities.map(city => (
-                  <tr key={city.id}>
-                    <td>{city.name_ar}</td>
-                    <td>{city.name_en || '-'}</td>
-                    <td>{city.status === 'active' ? 'فعالة' : 'موقوفة'}</td>
-                    <td>
-                      <button className="secondary-btn small-btn" onClick={() => updateCatalogStatus('cities', city.id, city.status === 'active' ? 'inactive' : 'active')}>
-                        {city.status === 'active' ? 'إيقاف' : 'تفعيل'}
-                      </button>
-                      <button className="danger-btn small-btn" onClick={() => deleteCatalogItem('cities', city.id, city.name_ar)}>
-                        حذف
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-
-          <div className="catalog-box">
-            <h3>إضافة حي</h3>
-            <form className="mini-form" onSubmit={createDistrict}>
-              <select name="city_id" value={districtForm.city_id} onChange={handleDistrictChange} required>
-                <option value="">اختر المدينة</option>
-                {cities.filter(c => c.status === 'active').map(city => (
-                  <option key={city.id} value={city.id}>{city.name_ar}</option>
-                ))}
-              </select>
-              <input name="name_ar" value={districtForm.name_ar} onChange={handleDistrictChange} placeholder="اسم الحي عربي" required />
-              <input name="name_en" value={districtForm.name_en} onChange={handleDistrictChange} placeholder="اسم الحي إنجليزي" />
-              <button type="submit" disabled={savingCatalog}>{savingCatalog ? 'جاري الحفظ...' : 'إضافة حي'}</button>
-            </form>
-
-            <table className="small-table compact-table">
-              <thead><tr><th>الحي</th><th>المدينة</th><th>الحالة</th><th>إجراء</th></tr></thead>
-              <tbody>
-                {districts.map(d => (
-                  <tr key={d.id}>
-                    <td>{d.name_ar}</td>
-                    <td>{d.city_name || '-'}</td>
-                    <td>{d.status === 'active' ? 'فعال' : 'موقوف'}</td>
-                    <td>
-                      <button className="secondary-btn small-btn" onClick={() => updateCatalogStatus('districts', d.id, d.status === 'active' ? 'inactive' : 'active')}>
-                        {d.status === 'active' ? 'إيقاف' : 'تفعيل'}
-                      </button>
-                      <button className="danger-btn small-btn" onClick={() => deleteCatalogItem('districts', d.id, d.name_ar)}>
-                        حذف
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      </section>
-
-      <section className="panel">
-        <div className="panel-title-row">
-          <div>
-            <h2>إنشاء طلب جديد</h2>
-            <p className="muted">أدخل بيانات العميلة والحجز من لوحة الإدارة مباشرة</p>
-          </div>
-        </div>
-
-        <form className="booking-form" onSubmit={createBooking}>
-          <div className="field">
-            <label>اسم العميلة</label>
-            <input
-              name="name"
-              value={form.name}
-              onChange={handleChange}
-              placeholder="مثال: سارة أحمد"
-              required
-            />
-          </div>
-
-          <div className="field">
-            <label>رقم الجوال</label>
-            <input
-              name="phone"
-              value={form.phone}
-              onChange={handleChange}
-              placeholder="05xxxxxxxx"
-              required
-            />
-          </div>
-
-          <div className="field">
-            <label>المدينة</label>
-            <select name="city" value={form.city} onChange={handleChange} required>
-              {(cities.length ? cities.filter(c => c.status === 'active') : [
-                { id: 'riyadh', name_ar: 'الرياض' },
-                { id: 'jeddah', name_ar: 'جدة' },
-                { id: 'dammam', name_ar: 'الدمام' }
-              ]).map(c => (
-                <option key={c.id} value={c.name_ar}>{c.name_ar}</option>
-              ))}
-            </select>
-          </div>
-
-          <div className="field">
-            <label>الحي</label>
-            <input
-              name="district"
-              value={form.district}
-              onChange={handleChange}
-              placeholder="مثال: حي النرجس"
-              required
-            />
-          </div>
-
-          <div className="field">
-            <label>نوع المناسبة</label>
-            <select name="event_type" value={form.event_type} onChange={handleChange}>
-              <option value="زواج">زواج</option>
-              <option value="ملكة">ملكة</option>
-              <option value="عيد">عيد</option>
-              <option value="جلسة خاصة">جلسة خاصة</option>
-              <option value="حناء أطفال">حناء أطفال</option>
-              <option value="أخرى">أخرى</option>
-            </select>
-          </div>
-
-          <div className="field">
-            <label>نوع الخدمة</label>
-            <select name="service_type" value={form.service_type} onChange={handleChange}>
-              {(services.length ? services.filter(s => s.status === 'active') : [
-                { id: 's1', name: 'حناء بسيطة' },
-                { id: 's2', name: 'حناء متوسطة' },
-                { id: 's3', name: 'حناء فخمة' },
-                { id: 's4', name: 'حناء عروس' }
-              ]).map(svc => (
-                <option key={svc.id} value={svc.name}>{svc.name}</option>
-              ))}
-            </select>
-          </div>
-
-          <div className="field">
-            <label>تاريخ الحجز</label>
-            <input
-              type="date"
-              name="booking_date"
-              value={form.booking_date}
-              onChange={handleChange}
-              required
-            />
-          </div>
-
-          <div className="field">
-            <label>وقت الحجز</label>
-            <input
-              type="time"
-              name="booking_time"
-              value={form.booking_time}
-              onChange={handleChange}
-              required
-            />
-          </div>
-
-          <div className="field">
-            <label>عدد الأشخاص</label>
-            <input
-              type="number"
-              min="1"
-              name="people_count"
-              value={form.people_count}
-              onChange={handleChange}
-              required
-            />
-          </div>
-
-          <div className="field wide">
-            <label>العنوان</label>
-            <input
-              name="address"
-              value={form.address}
-              onChange={handleChange}
-              placeholder="مثال: الرياض - حي النرجس"
-              required
-            />
-          </div>
-
-          <div className="field full">
-            <label>ملاحظات</label>
-            <textarea
-              name="customer_notes"
-              value={form.customer_notes}
-              onChange={handleChange}
-              placeholder="أي تفاصيل إضافية عن الطلب"
-              rows="3"
-            />
-          </div>
-
-          <div className="form-actions">
-            <button type="submit" disabled={savingBooking}>
-              {savingBooking ? 'جاري الحفظ...' : 'إنشاء الطلب'}
-            </button>
-          </div>
-        </form>
-      </section>
-
-      <section className="panel">
-        <div className="panel-title-row">
-          <div>
-            <h2>إدارة الحنانات</h2>
-            <p className="muted">إضافة الحنانات المتاحات وربطهن بالطلبات</p>
-          </div>
-        </div>
-
-        <form className="booking-form" onSubmit={createArtist}>
-          <div className="field">
-            <label>اسم الحنانة</label>
-            <input
-              name="name"
-              value={artistForm.name}
-              onChange={handleArtistChange}
-              placeholder="مثال: أم نورة"
-              required
-            />
-          </div>
-
-          <div className="field">
-            <label>رقم الجوال</label>
-            <input
-              name="phone"
-              value={artistForm.phone}
-              onChange={handleArtistChange}
-              placeholder="05xxxxxxxx"
-              required
-            />
-          </div>
-
-          <div className="field">
-            <label>المدينة</label>
-            <select name="city" value={artistForm.city} onChange={handleArtistChange}>
-              {(cities.length ? cities.filter(c => c.status === 'active') : [
-                { id: 'riyadh', name_ar: 'الرياض' },
-                { id: 'jeddah', name_ar: 'جدة' },
-                { id: 'dammam', name_ar: 'الدمام' }
-              ]).map(c => (
-                <option key={c.id} value={c.name_ar}>{c.name_ar}</option>
-              ))}
-            </select>
-          </div>
-
-          <div className="field">
-            <label>الأحياء التي تغطيها</label>
-            <input
-              name="districts"
-              value={artistForm.districts}
-              onChange={handleArtistChange}
-              placeholder="مثال: النرجس، الياسمين"
-            />
-          </div>
-
-          <div className="field wide">
-            <label>المهارات</label>
-            <input
-              name="skills"
-              value={artistForm.skills}
-              onChange={handleArtistChange}
-              placeholder="مثال: حناء عروس، حناء أطفال"
-            />
-          </div>
-
-          <div className="field">
-            <label>التقييم الداخلي</label>
-            <input
-              type="number"
-              min="1"
-              max="5"
-              step="0.1"
-              name="rating"
-              value={artistForm.rating}
-              onChange={handleArtistChange}
-            />
-          </div>
-
-          <div className="field">
-            <label>الحالة</label>
-            <select name="status" value={artistForm.status} onChange={handleArtistChange}>
-              <option value="active">فعالة</option>
-              <option value="inactive">غير فعالة</option>
-            </select>
-          </div>
-
-          <div className="field full">
-            <label>نبذة / ملاحظات</label>
-            <textarea
-              name="bio"
-              value={artistForm.bio}
-              onChange={handleArtistChange}
-              rows="2"
-              placeholder="ملاحظات داخلية عن الحنانة"
-            />
-          </div>
-
-          <div className="form-actions">
-            <button type="submit" disabled={savingArtist}>
-              {savingArtist ? 'جاري الحفظ...' : 'إضافة حنانة'}
-            </button>
-          </div>
-        </form>
-
-        <table className="small-table">
-          <thead>
-            <tr>
-              <th>الاسم</th>
-              <th>الجوال</th>
-              <th>المدينة</th>
-              <th>الأحياء</th>
-              <th>المهارات</th>
-              <th>التقييم</th>
-              <th>طلبات مكتملة</th>
-              <th>تقييمات</th>
-              <th>الحالة</th>
-              <th>إجراء</th>
-            </tr>
-          </thead>
-
-          <tbody>
-            {artists.map(a => (
-              <tr key={a.id}>
-                <td>{a.name}</td>
-                <td>{a.phone}</td>
-                <td>{a.city_name || '-'}</td>
-                <td>{a.districts || '-'}</td>
-                <td>{a.skills || '-'}</td>
-                <td>{a.review_rating || a.rating || '-'}</td>
-                <td>{a.completed_bookings ?? 0}</td>
-                <td>{a.review_count ?? 0}</td>
-                <td>{a.status === 'active' ? 'فعالة' : 'غير فعالة'}</td>
-                <td>
-                  <button className="danger-btn" onClick={() => deleteArtist(a.id, a.name)}>
-                    حذف
-                  </button>
-                </td>
-              </tr>
-            ))}
-
-            {artists.length === 0 && (
-              <tr>
-                <td colSpan="10" className="empty">لا توجد حنانات حالياً</td>
-              </tr>
-            )}
-          </tbody>
-        </table>
-      </section>
-
-      <section className="panel">
-        <div className="panel-title-row">
-          <div>
-            <h2>توفر وتقييم الحنانات - v1.3</h2>
-            <p className="muted">إدارة جدول توفر الحنانة وتقييم الجودة بعد تنفيذ الطلبات</p>
-          </div>
-        </div>
-
-        <div className="catalog-grid artist-ops-grid">
-          <div className="catalog-box">
-            <h3>إضافة توفر للحنانة</h3>
-            <form className="mini-form" onSubmit={createAvailability}>
-              <select name="artist_id" value={availabilityForm.artist_id} onChange={handleAvailabilityChange} required>
-                <option value="">اختر الحنانة</option>
-                {artists.filter(a => a.status === 'active').map(a => (
-                  <option key={a.id} value={a.id}>{a.name}</option>
-                ))}
-              </select>
-              <input type="date" name="available_date" value={availabilityForm.available_date} onChange={handleAvailabilityChange} required />
-              <div className="mini-row">
-                <input type="time" name="from_time" value={availabilityForm.from_time} onChange={handleAvailabilityChange} />
-                <input type="time" name="to_time" value={availabilityForm.to_time} onChange={handleAvailabilityChange} />
-              </div>
-              <label className="check-line">
-                <input type="checkbox" name="is_available" checked={availabilityForm.is_available} onChange={handleAvailabilityChange} />
-                متاحة في هذا الموعد
-              </label>
-              <input name="note" value={availabilityForm.note} onChange={handleAvailabilityChange} placeholder="ملاحظة اختيارية" />
-              <button type="submit" disabled={savingArtistOps}>{savingArtistOps ? 'جاري الحفظ...' : 'إضافة التوفر'}</button>
-            </form>
-
-            <table className="small-table compact-table">
-              <thead><tr><th>الحنانة</th><th>التاريخ</th><th>من</th><th>إلى</th><th>الحالة</th><th>إجراء</th></tr></thead>
-              <tbody>
-                {availability.slice(0, 20).map(item => (
-                  <tr key={item.id}>
-                    <td>{item.artist_name || '-'}</td>
-                    <td>{formatDate(item.available_date)}</td>
-                    <td>{formatTime(item.from_time)}</td>
-                    <td>{formatTime(item.to_time)}</td>
-                    <td>{item.is_available ? 'متاحة' : 'غير متاحة'}</td>
-                    <td><button className="danger-btn small-btn" onClick={() => deleteAvailability(item.id)}>حذف</button></td>
-                  </tr>
-                ))}
-                {availability.length === 0 && <tr><td colSpan="6" className="empty">لا يوجد توفر مسجل</td></tr>}
-              </tbody>
-            </table>
-          </div>
-
-          <div className="catalog-box">
-            <h3>تقييم حنانة بعد الطلب</h3>
-            <form className="mini-form" onSubmit={createReview}>
-              <select name="artist_id" value={reviewForm.artist_id} onChange={handleReviewChange} required>
-                <option value="">اختر الحنانة</option>
-                {artists.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
-              </select>
-              <select name="booking_id" value={reviewForm.booking_id} onChange={handleReviewChange}>
-                <option value="">ربط بطلب اختياري</option>
-                {bookings.filter(b => b.assigned_artist_id === reviewForm.artist_id || !reviewForm.artist_id).map(b => (
-                  <option key={b.id} value={b.id}>{b.customer_name || 'طلب'} - {formatDate(b.booking_date)}</option>
-                ))}
-              </select>
-              <div className="mini-row">
-                <input type="number" min="1" max="5" name="punctuality" value={reviewForm.punctuality} onChange={handleReviewChange} placeholder="الالتزام" />
-                <input type="number" min="1" max="5" name="quality" value={reviewForm.quality} onChange={handleReviewChange} placeholder="الجودة" />
-                <input type="number" min="1" max="5" name="customer_handling" value={reviewForm.customer_handling} onChange={handleReviewChange} placeholder="التعامل" />
-              </div>
-              <label className="check-line"><input type="checkbox" name="suitable_for_brides" checked={reviewForm.suitable_for_brides} onChange={handleReviewChange} /> مناسبة للعرائس</label>
-              <label className="check-line"><input type="checkbox" name="suitable_for_groups" checked={reviewForm.suitable_for_groups} onChange={handleReviewChange} /> مناسبة للطلبات الجماعية</label>
-              <input name="note" value={reviewForm.note} onChange={handleReviewChange} placeholder="ملاحظة التقييم" />
-              <button type="submit" disabled={savingArtistOps}>{savingArtistOps ? 'جاري الحفظ...' : 'إضافة التقييم'}</button>
-            </form>
-
-            <table className="small-table compact-table">
-              <thead><tr><th>الحنانة</th><th>التقييم</th><th>الطلب</th><th>ملاحظة</th><th>إجراء</th></tr></thead>
-              <tbody>
-                {reviews.slice(0, 20).map(r => (
-                  <tr key={r.id}>
-                    <td>{r.artist_name || '-'}</td>
-                    <td>{r.overall_rating || '-'}</td>
-                    <td>{r.customer_name || '-'}</td>
-                    <td>{r.note || '-'}</td>
-                    <td><button className="danger-btn small-btn" onClick={() => deleteReview(r.id)}>حذف</button></td>
-                  </tr>
-                ))}
-                {reviews.length === 0 && <tr><td colSpan="5" className="empty">لا توجد تقييمات بعد</td></tr>}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      </section>
-
-      <section className="panel">
-        <div className="panel-title-row">
-          <div>
-            <h2>الطلبات</h2>
-            <p className="muted">عدد الطلبات المعروضة: {filteredBookings.length} من {bookings.length}</p>
-          </div>
-          <div className="title-actions">
-            <button className="secondary-btn" onClick={exportBookingsCsv}>تصدير CSV</button>
-            <button className="secondary-btn" onClick={resetFilters}>مسح الفلاتر</button>
-          </div>
-        </div>
-
-        <div className="filters-row">
-          <div className="field filter-field">
-            <label>بحث عام</label>
-            <input
-              name="search"
-              value={filters.search}
-              onChange={handleFilterChange}
-              placeholder="بحث بالاسم، الجوال، المدينة، الخدمة، الحنانة"
-            />
-          </div>
-
-          <div className="field filter-field">
-            <label>حالة الطلب</label>
-            <select name="status" value={filters.status} onChange={handleFilterChange}>
-              <option value="all">كل الحالات</option>
-              {statusOptions.map(([value, label]) => (
-                <option key={value} value={value}>{label}</option>
-              ))}
-            </select>
-          </div>
-
-          <div className="field filter-field">
-            <label>حالة الدفع</label>
-            <select name="payment_status" value={filters.payment_status} onChange={handleFilterChange}>
-              <option value="all">كل حالات الدفع</option>
-              <option value="unpaid">غير مدفوع</option>
-              <option value="deposit_paid">عربون مدفوع</option>
-              <option value="paid">مدفوع بالكامل</option>
-              <option value="refunded">مسترجع</option>
-            </select>
-          </div>
-
-          <div className="field filter-field">
-            <label>المدينة</label>
-            <select name="city" value={filters.city} onChange={handleFilterChange}>
-              <option value="all">كل المدن</option>
-              {cityFilterOptions.map(city => (
-                <option key={city} value={city}>{city}</option>
-              ))}
-            </select>
-          </div>
-
-          <div className="field filter-field">
-            <label>الحنانة</label>
-            <select name="artist" value={filters.artist} onChange={handleFilterChange}>
-              <option value="all">كل الحنانات</option>
-              {artists.map(a => (
-                <option key={a.id} value={a.id}>{a.name}</option>
-              ))}
-            </select>
-          </div>
-        </div>
-
-        <table>
-          <thead>
-            <tr>
-              <th>رقم</th>
-              <th>العميلة</th>
-              <th>الجوال</th>
-              <th>المدينة</th>
-              <th>الخدمة</th>
-              <th>الحنانة</th>
-              <th>السعر النهائي</th>
-              <th>الدفع</th>
-              <th>التاريخ</th>
-              <th>الوقت</th>
-              <th>الحالة</th>
-              <th>إجراء</th>
-            </tr>
-          </thead>
-
-          <tbody>
-            {filteredBookings.map((b, i) => (
-              <tr key={b.id}>
-                <td>{i + 1}</td>
-                <td>{b.customer_name || '-'}</td>
-                <td>{b.customer_phone || '-'}</td>
-                <td>{b.city_name || '-'}</td>
-                <td>{b.service_name || '-'}</td>
-                <td>{b.artist_name || '-'}</td>
-                <td>{formatMoney(b.final_price)}</td>
-                <td>{paymentLabels[b.payment_status] || b.payment_status || '-'}</td>
-                <td>{formatDate(b.booking_date)}</td>
-                <td>{formatTime(b.booking_time)}</td>
-                <td>
-                  <span className="status">{statusLabels[b.status] || b.status}</span>
-                </td>
-                <td>
-                  <div className="actions-stack">
-                    <select value={b.status} onChange={e => updateStatus(b.id, e.target.value)}>
-                      {statusOptions.map(([value, label]) => (
-                        <option key={value} value={value}>{label}</option>
-                      ))}
-                    </select>
-
-                    <select
-                      value={b.assigned_artist_id || ''}
-                      onChange={e => assignArtist(b.id, e.target.value)}
-                    >
-                      <option value="">تعيين حنانة</option>
-                      {artists
-                        .filter(a => a.status === 'active')
-                        .map(a => (
-                          <option key={a.id} value={a.id}>{a.name}</option>
-                        ))}
-                    </select>
-
-
-                    <button className="secondary-btn details-btn" onClick={() => openBookingDetails(b.id)}>
-                      تفاصيل الطلب
-                    </button>
-
-                    <button className="danger-btn" onClick={() => deleteBooking(b.id, b.customer_name)}>
-                      حذف الطلب
-                    </button>
-                  </div>
-                </td>
-              </tr>
-            ))}
-
-            {filteredBookings.length === 0 && (
-              <tr>
-                <td colSpan="12" className="empty">لا توجد طلبات حالياً</td>
-              </tr>
-            )}
-          </tbody>
-        </table>
-      </section>
-
-      {selectedBooking && (
-        <div className="modal-backdrop">
-          <section className="details-modal" dir="rtl">
-            <div className="modal-header">
-              <div>
-                <h2>تفاصيل الطلب</h2>
-                <p className="muted">مراجعة بيانات الحجز وتحديث الأسعار والدفع والملاحظات</p>
-              </div>
-              <button className="secondary-btn" onClick={closeBookingDetails}>إغلاق</button>
-            </div>
-
-            <div className="details-grid">
-              <div className="detail-item"><span>العميلة</span><strong>{selectedBooking.customer_name || '-'}</strong></div>
-              <div className="detail-item"><span>الجوال</span><strong>{selectedBooking.customer_phone || '-'}</strong></div>
-              <div className="detail-item"><span>المدينة</span><strong>{selectedBooking.city_name || '-'}</strong></div>
-              <div className="detail-item"><span>الحي</span><strong>{selectedBooking.district_name || '-'}</strong></div>
-              <div className="detail-item"><span>الخدمة</span><strong>{selectedBooking.service_name || '-'}</strong></div>
-              <div className="detail-item"><span>الحنانة</span><strong>{selectedBooking.artist_name || '-'}</strong></div>
-              <div className="detail-item"><span>التاريخ</span><strong>{formatDate(selectedBooking.booking_date)}</strong></div>
-              <div className="detail-item"><span>الوقت</span><strong>{formatTime(selectedBooking.booking_time)}</strong></div>
-              <div className="detail-item"><span>عدد الأشخاص</span><strong>{selectedBooking.people_count || '-'}</strong></div>
-              <div className="detail-item"><span>الحالة</span><strong>{statusLabels[selectedBooking.status] || selectedBooking.status}</strong></div>
-              <div className="detail-item full"><span>العنوان</span><strong>{selectedBooking.address || '-'}</strong></div>
-              <div className="detail-item full"><span>ملاحظات العميلة</span><strong>{selectedBooking.customer_notes || '-'}</strong></div>
-            </div>
-
-            <div className="quick-actions">
-              <a
-                className="whatsapp-btn"
-                href={whatsappLink(selectedBooking.customer_phone, `مرحباً ${selectedBooking.customer_name || ''}، بخصوص طلب الحناء بتاريخ ${formatDate(selectedBooking.booking_date)} الساعة ${formatTime(selectedBooking.booking_time)}.`)}
-                target="_blank"
-                rel="noreferrer"
-              >
-                واتساب العميلة
-              </a>
-              {selectedBooking.artist_phone && (
-                <a
-                  className="whatsapp-btn secondary-whatsapp"
-                  href={whatsappLink(selectedBooking.artist_phone, `مرحباً، لديك طلب حناء بتاريخ ${formatDate(selectedBooking.booking_date)} الساعة ${formatTime(selectedBooking.booking_time)} للعميلة ${selectedBooking.customer_name || ''}.`)}
-                  target="_blank"
-                  rel="noreferrer"
-                >
-                  واتساب الحنانة
-                </a>
-              )}
-            </div>
-
-            <form className="booking-form details-form" onSubmit={saveBookingDetails}>
-              <div className="field">
-                <label>السعر التقديري</label>
-                <input
-                  type="number"
-                  min="0"
-                  name="estimated_price"
-                  value={detailForm.estimated_price}
-                  onChange={handleDetailChange}
-                  placeholder="مثال: 300"
-                />
-              </div>
-
-              <div className="field">
-                <label>السعر النهائي</label>
-                <input
-                  type="number"
-                  min="0"
-                  name="final_price"
-                  value={detailForm.final_price}
-                  onChange={handleDetailChange}
-                  placeholder="مثال: 450"
-                />
-              </div>
-
-              <div className="field">
-                <label>العربون</label>
-                <input
-                  type="number"
-                  min="0"
-                  name="deposit_amount"
-                  value={detailForm.deposit_amount}
-                  onChange={handleDetailChange}
-                  placeholder="مثال: 100"
-                />
-              </div>
-
-              <div className="field">
-                <label>حالة الدفع</label>
-                <select name="payment_status" value={detailForm.payment_status} onChange={handleDetailChange}>
-                  <option value="unpaid">غير مدفوع</option>
-                  <option value="deposit_paid">عربون مدفوع</option>
-                  <option value="paid">مدفوع بالكامل</option>
-                  <option value="refunded">مسترجع</option>
-                </select>
-              </div>
-
-              <div className="field full">
-                <label>ملاحظات الإدارة</label>
-                <textarea
-                  name="admin_notes"
-                  value={detailForm.admin_notes}
-                  onChange={handleDetailChange}
-                  rows="3"
-                  placeholder="ملاحظات داخلية تظهر للإدارة فقط"
-                />
-              </div>
-
-              <div className="form-actions">
-                <button type="submit" disabled={savingDetails}>
-                  {savingDetails ? 'جاري الحفظ...' : 'حفظ تفاصيل الطلب'}
-                </button>
-              </div>
-            </form>
-
-            <div className="history-box">
-              <h3>سجل حالة الطلب</h3>
-              {bookingHistory.length === 0 && <p className="muted">لا يوجد سجل بعد</p>}
-              {bookingHistory.map(item => (
-                <div className="history-item" key={item.id}>
-                  <strong>{statusLabels[item.new_status] || item.new_status || 'تحديث'}</strong>
-                  <span>{item.note || '-'}</span>
-                  <small>{new Date(item.created_at).toLocaleString('ar-SA')}</small>
-                </div>
-              ))}
-            </div>
-          </section>
-        </div>
-      )}
-    </main>
-  );
+  return <main dir="rtl">
+    <header className="header"><div><h1>لوحة إدارة Beauty Home Service</h1><p>إدارة الطلبات وخبيرات التجميل والمواقع والخدمات</p></div><button onClick={load}>تحديث</button></header>
+    {message && <div className="message">{message}</div>}
+    <section className="cards"><Card title="كل الطلبات" value={dashboard.total_bookings ?? 0}/><Card title="طلبات جديدة" value={dashboard.new_bookings ?? 0}/><Card title="طلبات اليوم" value={dashboard.today_bookings ?? 0}/><Card title="بدون خبيرة" value={dashboard.unassigned_bookings ?? 0}/><Card title="خبيرات فعالات" value={dashboard.active_beauticians ?? dashboard.active_artists ?? 0}/></section>
+
+    <CatalogPanel title="إدارة المواقع: المناطق والمدن والأحياء" catalog={catalog} load={load} api={api} setMessage={setMessage} />
+    <ServicesPanel catalog={catalog} load={load} api={api} setMessage={setMessage} />
+
+    <section className="panel"><h2>استيراد بيانات المواقع</h2><p className="muted">يمكنك استخدام البيانات الجاهزة من GitHub فوراً للتجربة، أو استخدام SPL الرسمي عند توفر مفتاح API.</p>
+      <div className="actions"><button onClick={importSaudiOpenData}>استيراد بيانات السعودية الجاهزة من GitHub</button></div>
+      <p className="muted">المصدر التجريبي: homaily/Saudi-Arabia-Regions-Cities-and-Districts. يستخدم هذا الخيار كبديل مؤقت إلى حين تفعيل SPL API.</p>
+      <hr />
+      <h3>استيراد من SPL National Address API</h3><p className="muted">يحتاج Access Token من بوابة العنوان الوطني. ابدأ بالمناطق، ثم المدن، ثم أحياء مدينة محددة لتجنب حدود الاشتراك.</p>
+      <div className="grid4"><Field label="SPL API Key"><TextInput value={splKey} onChange={setSplKey} placeholder="اتركه فارغاً إذا موجود في SPL_API_KEY" /></Field><Field label="نوع الاستيراد"><Select value={splMode} onChange={setSplMode}><option value="regions">المناطق</option><option value="cities">المدن</option><option value="districts">أحياء مدينة</option><option value="all">المناطق والمدن</option></Select></Field><Field label="المنطقة للمدن"><Select value={splRegionId} onChange={setSplRegionId}><OptionList items={catalog.regions} empty="كل المناطق" /></Select></Field><Field label="المدينة للأحياء"><Select value={splCityId} onChange={setSplCityId}><OptionList items={catalog.cities} empty="اختر المدينة" /></Select></Field></div><button onClick={importSpl}>استيراد من SPL</button></section>
+
+    <section className="panel"><h2>إنشاء طلب جديد</h2><form className="grid4" onSubmit={createBooking}><Field label="اسم العميلة"><TextInput required value={bookingForm.name} onChange={v=>setBooking('name',v)} /></Field><Field label="الجوال"><TextInput required value={bookingForm.phone} onChange={v=>setBooking('phone',v)} /></Field><Field label="المنطقة"><Select required value={bookingForm.region_id} onChange={v=>setBooking('region_id',v)}><OptionList items={catalog.regions}/></Select></Field><Field label="المدينة"><Select required value={bookingForm.city_id} onChange={v=>setBooking('city_id',v)}><OptionList items={citiesForBooking}/></Select></Field><Field label="الحي"><Select required value={bookingForm.district_id} onChange={v=>setBooking('district_id',v)}><OptionList items={districtsForBooking}/></Select></Field><Field label="قسم الخدمة"><Select required value={bookingForm.service_category_id} onChange={v=>setBooking('service_category_id',v)}><OptionList items={catalog.service_categories}/></Select></Field><Field label="الخدمة"><Select required value={bookingForm.service_id} onChange={v=>setBooking('service_id',v)}><OptionList items={servicesForBooking} label="display_name"/></Select></Field><Field label="نوع المناسبة"><TextInput value={bookingForm.event_type} onChange={v=>setBooking('event_type',v)} /></Field><Field label="التاريخ"><TextInput type="date" required value={bookingForm.booking_date} onChange={v=>setBooking('booking_date',v)} /></Field><Field label="الوقت"><TextInput type="time" required value={bookingForm.booking_time} onChange={v=>setBooking('booking_time',v)} /></Field><Field label="عدد الأشخاص"><TextInput type="number" value={bookingForm.people_count} onChange={v=>setBooking('people_count',Number(v)||1)} /></Field><Field label="العنوان"><TextInput value={bookingForm.address} onChange={v=>setBooking('address',v)} /></Field><Field label="ملاحظات"><textarea value={bookingForm.customer_notes} onChange={e=>setBooking('customer_notes',e.target.value)} /></Field><div className="actions"><button>إنشاء الطلب</button></div></form></section>
+
+    <section className="panel"><h2>إدارة خبيرات التجميل</h2><form className="grid4" onSubmit={saveBeautician}><Field label="اسم خبيرة التجميل"><TextInput required value={beauticianForm.name} onChange={v=>setBeautician('name',v)} /></Field><Field label="الجوال"><TextInput required value={beauticianForm.phone} onChange={v=>setBeautician('phone',v)} /></Field><Field label="المنطقة"><Select value={beauticianForm.region_id} onChange={v=>setBeautician('region_id',v)}><OptionList items={catalog.regions}/></Select></Field><Field label="المدينة"><Select value={beauticianForm.city_id} onChange={v=>setBeautician('city_id',v)}><OptionList items={citiesForBeautician}/></Select></Field><Field label="الخبرة الأساسية"><Select value={beauticianForm.main_expertise_service_id} onChange={v=>setBeautician('main_expertise_service_id',v)}><OptionList items={catalog.services} label="display_name" /></Select></Field><Field label="الأحياء التي تغطيها"><TextInput value={beauticianForm.districts} onChange={v=>setBeautician('districts',v)} /></Field><Field label="المهارات"><TextInput value={beauticianForm.skills} onChange={v=>setBeautician('skills',v)} /></Field><Field label="التقييم"><TextInput type="number" value={beauticianForm.rating} onChange={v=>setBeautician('rating',Number(v)||5)} /></Field><Field label="الحالة"><Select value={beauticianForm.status} onChange={v=>setBeautician('status',v)}><option value="active">فعالة</option><option value="inactive">غير فعالة</option></Select></Field><Field label="نبذة"><textarea value={beauticianForm.bio} onChange={e=>setBeautician('bio',e.target.value)} /></Field><div className="actions"><button>{editing.type==='beautician' ? 'حفظ التعديل' : 'إضافة خبيرة'}</button></div></form>
+      <table><thead><tr><th>الاسم</th><th>الجوال</th><th>المنطقة</th><th>المدينة</th><th>الخبرة الأساسية</th><th>التقييم</th><th>إجراء</th></tr></thead><tbody>{beauticians.map(a=><tr key={a.id}><td>{a.name}</td><td>{a.phone}</td><td>{a.region_name||'-'}</td><td>{a.city_name||'-'}</td><td>{a.main_expertise_name||'-'}</td><td>{a.review_rating||a.rating||'-'}</td><td><button onClick={()=>{setBeauticianForm({...emptyBeautician,...a});setEditing({type:'beautician',id:a.id});}}>تعديل</button><button className="danger" onClick={()=>deleteItem('/admin/beauticians',a.id,'خبيرة التجميل')}>حذف</button></td></tr>)}</tbody></table></section>
+
+    <section className="panel"><h2>الطلبات</h2><div className="filters"><input placeholder="بحث" value={filters.q} onChange={e=>setFilters({...filters,q:e.target.value})}/><select value={filters.status} onChange={e=>setFilters({...filters,status:e.target.value})}><option value="">كل الحالات</option>{statusOptions.map(([k,v])=><option key={k} value={k}>{v}</option>)}</select><select value={filters.payment} onChange={e=>setFilters({...filters,payment:e.target.value})}><option value="">كل الدفع</option>{paymentOptions.map(([k,v])=><option key={k} value={k}>{v}</option>)}</select><select value={filters.region_id} onChange={e=>setFilters({...filters,region_id:e.target.value,city_id:''})}><OptionList items={catalog.regions} empty="كل المناطق" /></select><select value={filters.city_id} onChange={e=>setFilters({...filters,city_id:e.target.value})}><OptionList items={catalog.cities.filter(c=>!filters.region_id||c.region_id===filters.region_id)} empty="كل المدن" /></select></div><p className="muted">المعروض: {filteredBookings.length} من {bookings.length}</p><table><thead><tr><th>رقم</th><th>العميلة</th><th>الجوال</th><th>الموقع</th><th>الخدمة</th><th>خبيرة التجميل</th><th>التاريخ</th><th>الحالة</th><th>الدفع</th><th>إجراء</th></tr></thead><tbody>{filteredBookings.map((b,i)=><tr key={b.id}><td>{i+1}</td><td>{b.customer_name||'-'}</td><td>{b.customer_phone||'-'}</td><td>{b.region_name||'-'} / {b.city_name||'-'} / {b.district_name||'-'}</td><td>{b.service_category_name||'-'} / {b.service_name||'-'}</td><td>{b.artist_name||'-'}</td><td>{formatDate(b.booking_date)} {formatTime(b.booking_time)}</td><td><span className="status">{statusLabels[b.status]||b.status}</span></td><td>{paymentLabels[b.payment_status||'unpaid']}</td><td><select value={b.status} onChange={e=>updateStatus(b.id,e.target.value)}>{statusOptions.map(([k,v])=><option key={k} value={k}>{v}</option>)}</select><select value={b.assigned_artist_id||''} onChange={e=>assignBeautician(b.id,e.target.value)}><option value="">تعيين خبيرة</option>{beauticians.filter(a=>a.status==='active').map(a=><option key={a.id} value={a.id}>{a.name}</option>)}</select><a className="mini" href={whatsapp(b.customer_phone, `مرحباً، بخصوص طلبك في Beauty Home Service`)} target="_blank">واتساب</a><button className="danger" onClick={()=>deleteItem('/admin/bookings',b.id,'الطلب')}>حذف</button></td></tr>)}</tbody></table></section>
+  </main>;
 }
+
+function CatalogPanel({ catalog, api, load, setMessage }) {
+  const [region, setRegion] = useState(emptyRegion), [city, setCity] = useState(emptyCity), [district, setDistrict] = useState(emptyDistrict);
+  const [edit, setEdit] = useState({});
+  const [selectedRegionId, setSelectedRegionId] = useState('');
+  const [selectedCityId, setSelectedCityId] = useState('');
+
+  const visibleCities = catalog.cities.filter(c => !selectedRegionId || c.region_id === selectedRegionId);
+  const cityOptionsForDistrict = catalog.cities.filter(c => !selectedRegionId || c.region_id === selectedRegionId);
+  const visibleDistricts = catalog.districts.filter(d => !selectedCityId || d.city_id === selectedCityId);
+
+  function changeSelectedRegion(value) {
+    setSelectedRegionId(value);
+    setSelectedCityId('');
+    setCity(prev => ({ ...prev, region_id: value || prev.region_id }));
+    setDistrict(prev => ({ ...prev, city_id: '' }));
+  }
+
+  function changeSelectedCity(value) {
+    setSelectedCityId(value);
+    setDistrict(prev => ({ ...prev, city_id: value || prev.city_id }));
+  }
+
+  async function save(path, form, reset) {
+    try {
+      const id = edit[path];
+      await api(`/admin/${path}${id?`/${id}`:''}`, { method:id?'PATCH':'POST', body: JSON.stringify(clean(form)) });
+      reset();
+      setEdit({});
+      setMessage('تم الحفظ.');
+      await load();
+    } catch(e) { setMessage(`تعذر الحفظ: ${e.message}`); }
+  }
+  async function del(path,id,label){ if(!confirm(`حذف ${label}؟`)) return; try{ await api(`/admin/${path}/${id}`,{method:'DELETE'}); await load(); }catch(e){ setMessage(e.message); } }
+  return <section className="panel"><h2>إدارة المواقع: المناطق والمدن والأحياء</h2><p className="muted">عند عدم اختيار منطقة أو مدينة تظهر كل البيانات. عند اختيار منطقة تظهر مدنها فقط، وعند اختيار مدينة تظهر أحياؤها فقط.</p><div className="three"><div><h3>المناطق</h3><Field label="اسم عربي"><TextInput value={region.name_ar} onChange={v=>setRegion({...region,name_ar:v})}/></Field><Field label="اسم إنجليزي"><TextInput value={region.name_en} onChange={v=>setRegion({...region,name_en:v})}/></Field><button onClick={()=>save('regions',region,()=>setRegion(emptyRegion))}>{edit.regions?'حفظ تعديل':'إضافة منطقة'}</button><List items={catalog.regions} onEdit={x=>{setRegion({...emptyRegion,...x});setEdit({regions:x.id});}} onDel={x=>del('regions',x.id,'المنطقة')} /></div><div><h3>المدن</h3><Field label="فلترة المدن حسب المنطقة"><Select value={selectedRegionId} onChange={changeSelectedRegion}><OptionList items={catalog.regions} empty="كل المناطق"/></Select></Field><Field label="المنطقة للمدينة"><Select value={city.region_id} onChange={v=>setCity({...city,region_id:v})}><OptionList items={catalog.regions}/></Select></Field><Field label="اسم عربي"><TextInput value={city.name_ar} onChange={v=>setCity({...city,name_ar:v})}/></Field><Field label="اسم إنجليزي"><TextInput value={city.name_en} onChange={v=>setCity({...city,name_en:v})}/></Field><button onClick={()=>save('cities',city,()=>setCity(emptyCity))}>{edit.cities?'حفظ تعديل':'إضافة مدينة'}</button><p className="muted">المعروض: {visibleCities.length} من {catalog.cities.length}</p><List items={visibleCities} sub="region_name" onEdit={x=>{setCity({...emptyCity,...x});setSelectedRegionId(x.region_id||'');setEdit({cities:x.id});}} onDel={x=>del('cities',x.id,'المدينة')} /></div><div><h3>الأحياء</h3><Field label="فلترة المدن حسب المنطقة"><Select value={selectedRegionId} onChange={changeSelectedRegion}><OptionList items={catalog.regions} empty="كل المناطق"/></Select></Field><Field label="فلترة الأحياء حسب المدينة"><Select value={selectedCityId} onChange={changeSelectedCity}><OptionList items={cityOptionsForDistrict} empty="كل المدن"/></Select></Field><Field label="المدينة للحي"><Select value={district.city_id} onChange={v=>setDistrict({...district,city_id:v})}><OptionList items={cityOptionsForDistrict}/></Select></Field><Field label="اسم عربي"><TextInput value={district.name_ar} onChange={v=>setDistrict({...district,name_ar:v})}/></Field><Field label="اسم إنجليزي"><TextInput value={district.name_en} onChange={v=>setDistrict({...district,name_en:v})}/></Field><button onClick={()=>save('districts',district,()=>setDistrict(emptyDistrict))}>{edit.districts?'حفظ تعديل':'إضافة حي'}</button><p className="muted">المعروض: {visibleDistricts.length} من {catalog.districts.length}</p><List items={visibleDistricts} sub="city_name" onEdit={x=>{setDistrict({...emptyDistrict,...x});setSelectedCityId(x.city_id||'');setEdit({districts:x.id});}} onDel={x=>del('districts',x.id,'الحي')} /></div></div></section>;
+}
+
+function ServicesPanel({ catalog, api, load, setMessage }) {
+  const [cat, setCat] = useState(emptyCategory), [service, setService] = useState(emptyService), [edit, setEdit] = useState({});
+  async function save(path, form, reset) { try { const id = edit[path]; await api(`/admin/${path}${id?`/${id}`:''}`, { method:id?'PATCH':'POST', body: JSON.stringify(clean(form)) }); reset(); setEdit({}); setMessage('تم الحفظ.'); await load(); } catch(e) { setMessage(`تعذر الحفظ: ${e.message}`); } }
+  async function del(path,id,label){ if(!confirm(`حذف ${label}؟`)) return; try{ await api(`/admin/${path}/${id}`,{method:'DELETE'}); await load(); }catch(e){ setMessage(e.message); } }
+  return <section className="panel"><h2>إدارة أقسام الخدمات والخدمات</h2><div className="two"><div><h3>أقسام الخدمات</h3><Field label="اسم عربي"><TextInput value={cat.name_ar} onChange={v=>setCat({...cat,name_ar:v})}/></Field><Field label="اسم إنجليزي"><TextInput value={cat.name_en} onChange={v=>setCat({...cat,name_en:v})}/></Field><Field label="الوصف"><TextInput value={cat.description} onChange={v=>setCat({...cat,description:v})}/></Field><button onClick={()=>save('service-categories',cat,()=>setCat(emptyCategory))}>{edit['service-categories']?'حفظ تعديل':'إضافة قسم'}</button><List items={catalog.service_categories} onEdit={x=>{setCat({...emptyCategory,...x});setEdit({'service-categories':x.id});}} onDel={x=>del('service-categories',x.id,'القسم')} /></div><div><h3>الخدمات</h3><Field label="القسم"><Select value={service.category_id} onChange={v=>setService({...service,category_id:v})}><OptionList items={catalog.service_categories}/></Select></Field><Field label="اسم عربي"><TextInput value={service.name_ar} onChange={v=>setService({...service,name_ar:v,name:v})}/></Field><Field label="اسم إنجليزي"><TextInput value={service.name_en} onChange={v=>setService({...service,name_en:v})}/></Field><div className="grid3"><Field label="أقل سعر"><TextInput type="number" value={service.min_price} onChange={v=>setService({...service,min_price:v})}/></Field><Field label="أعلى سعر"><TextInput type="number" value={service.max_price} onChange={v=>setService({...service,max_price:v})}/></Field><Field label="المدة بالدقائق"><TextInput type="number" value={service.duration_minutes} onChange={v=>setService({...service,duration_minutes:v})}/></Field></div><button onClick={()=>save('services',service,()=>setService(emptyService))}>{edit.services?'حفظ تعديل':'إضافة خدمة'}</button><List items={catalog.services} name="display_name" sub="category_name" onEdit={x=>{setService({...emptyService,...x});setEdit({services:x.id});}} onDel={x=>del('services',x.id,'الخدمة')} /></div></div></section>;
+}
+function List({ items, name='name_ar', sub, onEdit, onDel }) { return <div className="listbox">{items.map(x=><div className="listrow" key={x.id}><span><b>{x[name]||x.name_ar||x.display_name}</b>{sub&&<small>{x[sub]||''}</small>}</span><span><button onClick={()=>onEdit(x)}>تعديل</button><button className="danger" onClick={()=>onDel(x)}>حذف</button></span></div>)}</div>; }
 
 createRoot(document.getElementById('root')).render(<App />);

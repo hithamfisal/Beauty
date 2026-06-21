@@ -1,17 +1,17 @@
-# Beauty Home Service v1.1
+# Henna Booking v1.1
 
 ## ما تم تنفيذه
 
 ### Backend
-- إضافة مؤشرات تشغيلية في لوحة الإحصائيات: طلبات اليوم، طلبات بدون Beauty Home Service، طلبات غير مدفوعة.
-- تحسين تعيين الBeauty Home Service مع تنبيه التعارض إذا كان للBeauty Home Service طلب آخر في نفس اليوم.
+- إضافة مؤشرات تشغيلية في لوحة الإحصائيات: طلبات اليوم، طلبات بدون حنانة، طلبات غير مدفوعة.
+- تحسين تعيين الحنانة مع تنبيه التعارض إذا كان للحنانة طلب آخر في نفس اليوم.
 - إضافة API لتقويم الطلبات حسب التاريخ.
-- إرجاع رقم جوال الBeauty Home Service داخل تفاصيل الطلب لاستخدامه في واتساب.
+- إرجاع رقم جوال الحنانة داخل تفاصيل الطلب لاستخدامه في واتساب.
 
 ### Admin Dashboard
 - إضافة بطاقات تشغيلية جديدة.
 - إضافة تقويم الطلبات اليومي.
-- إضافة أزرار واتساب للعميلة والBeauty Home Service داخل تفاصيل الطلب.
+- إضافة أزرار واتساب للعميلة والحنانة داخل تفاصيل الطلب.
 - إضافة تصدير CSV للطلبات المعروضة حسب الفلاتر.
 - إضافة عرض وقت الحجز داخل جدول الطلبات.
 - تحسين تنسيقات v1.1.
@@ -21,7 +21,7 @@
 شغل Backend:
 
 ```powershell
-cd "D:\Dashboards Projects\Beauty\Beauty V1\backend"
+cd "D:\Dashboards Projects\Henna Application\henna_booking_mvp_v1\backend"
 yarn install
 yarn dev
 ```
@@ -29,7 +29,7 @@ yarn dev
 شغل Admin Dashboard:
 
 ```powershell
-cd "D:\Dashboards Projects\Beauty\Beauty V1\admin-dashboard"
+cd "D:\Dashboards Projects\Henna Application\henna_booking_mvp_v1\admin-dashboard"
 yarn install
 yarn dev
 ```
@@ -38,8 +38,8 @@ yarn dev
 
 1. افتح لوحة الإدارة.
 2. أنشئ طلبين في نفس اليوم.
-3. أضف Beauty Home Service.
-4. عيّن نفس الBeauty Home Service للطلبين للتأكد من ظهور تنبيه التعارض.
+3. أضف حنانة.
+4. عيّن نفس الحنانة للطلبين للتأكد من ظهور تنبيه التعارض.
 5. افتح تفاصيل الطلب وجرب زر واتساب العميلة.
 6. استخدم تقويم الطلبات لاختيار يوم الطلب.
 7. جرّب زر تصدير CSV بعد استخدام الفلاتر.
