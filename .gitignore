@@ -1,12 +1,52 @@
-node_modules
+# Dependencies
+node_modules/
+**/node_modules/
+
+# Environment files
 .env
+.env.*
 backend/.env
+backend/.env.*
 admin-dashboard/.env
-dist
-build
-.dart_tool
+admin-dashboard/.env.*
+mobile-app/.env
+mobile-app/.env.*
+
+# Build outputs
+dist/
+build/
+**/dist/
+**/build/
+
+# Flutter / Dart
+.dart_tool/
 .flutter-plugins
 .flutter-plugins-dependencies
-.gradle
+.packages
+.pub-cache/
+.pub/
+
+# Android / Gradle
+.gradle/
+**/.gradle/
+mobile-app/android/.gradle/
+mobile-app/android/app/build/
+
+# Logs
 *.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# OS / Editor
 .DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Vercel local
+.vercel/
+
+# Backups / generated files
+*.bak
+*.tmp
