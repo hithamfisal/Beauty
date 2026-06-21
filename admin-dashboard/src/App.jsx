@@ -13,7 +13,7 @@ const statusOptions = Object.entries(statusLabels);
 const paymentLabels = { unpaid: 'غير مدفوع', deposit_paid: 'عربون مدفوع', paid: 'مدفوع بالكامل', refunded: 'مسترجع' };
 const paymentOptions = Object.entries(paymentLabels);
 
-const emptyBooking = { name:'', phone:'', region_id:'', city_id:'', district_id:'', service_category_id:'', service_id:'', event_type:'زواج', booking_date:'', booking_time:'18:00', people_count:1, address:'', customer_notes:'' };
+const emptyBooking = { name:'', phone:'', region_id:'', city_id:'', district_id:'', service_category_id:'', service_id:'', event_type:'زواج', booking_date:'', booking_time:'18:00', people_count:1, address:'', customer_notes:'', design_image_url:'' };
 const emptyBeautician = { name:'', phone:'', region_id:'', city_id:'', main_expertise_service_id:'', districts:'', skills:'', bio:'', rating:5, status:'active' };
 const emptyRegion = { name_ar:'', name_en:'', external_id:'', status:'active', sort_order:0 };
 const emptyCity = { region_id:'', name_ar:'', name_en:'', external_id:'', status:'active', sort_order:0 };
@@ -49,9 +49,15 @@ function App() {
   const [splRegionId, setSplRegionId] = useState('');
   const [splCityId, setSplCityId] = useState('');
   const [filters, setFilters] = useState({ q:'', status:'', payment:'', region_id:'', city_id:'', beautician_id:'' });
+  const [adminToken, setAdminToken] = useState(() => localStorage.getItem('beauty_admin_token') || '');
+  const [adminUser, setAdminUser] = useState(() => { try { return JSON.parse(localStorage.getItem('beauty_admin_user') || 'null'); } catch { return null; } });
+  const [loginForm, setLoginForm] = useState({ email: 'admin@beauty.local', password: '' });
+  const [selectedBooking, setSelectedBooking] = useState(null);
 
   async function api(path, options={}) {
-    const res = await fetch(`${API}${path}`, { headers:{ 'Content-Type':'application/json; charset=utf-8' }, ...options });
+    const headers = { 'Content-Type':'application/json; charset=utf-8', ...(options.headers || {}) };
+    if (adminToken && path.startsWith('/admin')) headers.Authorization = `Bearer ${adminToken}`;
+    const res = await fetch(`${API}${path}`, { ...options, headers });
     const data = await res.json().catch(() => null);
     if (!res.ok) throw new Error(data?.error || data?.details || 'Request failed');
     return data;
@@ -65,7 +71,29 @@ function App() {
       setDashboard(d); setBookings(Array.isArray(b)?b:[]); setCatalog(c); setBeauticians(Array.isArray(a)?a:[]);
     } catch(e) { setMessage(`خطأ تحميل البيانات: ${e.message}`); }
   }
-  useEffect(()=>{ load(); }, []);
+  async function login(e) {
+    e.preventDefault();
+    setMessage('');
+    try {
+      const res = await fetch(`${API}/admin/login`, { method:'POST', headers:{ 'Content-Type':'application/json; charset=utf-8' }, body: JSON.stringify(loginForm) });
+      const data = await res.json().catch(()=>null);
+      if (!res.ok) throw new Error(data?.error || 'فشل تسجيل الدخول');
+      localStorage.setItem('beauty_admin_token', data.token);
+      localStorage.setItem('beauty_admin_user', JSON.stringify(data.user));
+      setAdminToken(data.token);
+      setAdminUser(data.user);
+      setMessage('تم تسجيل الدخول.');
+    } catch(e) { setMessage(`تعذر تسجيل الدخول: ${e.message}`); }
+  }
+  function logout() {
+    localStorage.removeItem('beauty_admin_token');
+    localStorage.removeItem('beauty_admin_user');
+    setAdminToken('');
+    setAdminUser(null);
+    setDashboard({}); setBookings([]); setBeauticians([]);
+  }
+
+  useEffect(()=>{ if (adminToken) load(); }, [adminToken]);
 
   const citiesForBooking = catalog.cities.filter(c => !bookingForm.region_id || c.region_id === bookingForm.region_id);
   const districtsForBooking = catalog.districts.filter(d => !bookingForm.city_id || d.city_id === bookingForm.city_id);
@@ -138,9 +166,27 @@ function App() {
     } catch(e) { setMessage(`تعذر الاستيراد من SPL: ${e.message}`); }
   }
 
+  if (!adminToken) {
+    return <main dir="rtl" className="login-page">
+      <section className="login-card">
+        <h1>Beauty Home Service</h1>
+        <p className="muted">تسجيل دخول لوحة الإدارة</p>
+        {message && <div className="message">{message}</div>}
+    {selectedBooking && <BookingDetailsModal booking={selectedBooking} catalog={catalog} beauticians={beauticians} updateStatus={updateStatus} assignBeautician={assignBeautician} close={()=>setSelectedBooking(null)} />}
+        <form onSubmit={login}>
+          <Field label="البريد الإلكتروني"><TextInput value={loginForm.email} onChange={v=>setLoginForm({...loginForm,email:v})} required /></Field>
+          <Field label="كلمة المرور"><TextInput type="password" value={loginForm.password} onChange={v=>setLoginForm({...loginForm,password:v})} required /></Field>
+          <button>دخول</button>
+        </form>
+        <p className="muted">الحساب الافتراضي المحلي: admin@beauty.local / Beauty@12345. غيّره في الإنتاج عبر ADMIN_EMAIL و ADMIN_PASSWORD.</p>
+      </section>
+    </main>;
+  }
+
   return <main dir="rtl">
-    <header className="header"><div><h1>لوحة إدارة Beauty Home Service</h1><p>إدارة الطلبات وخبيرات التجميل والمواقع والخدمات</p></div><button onClick={load}>تحديث</button></header>
+    <header className="header"><div><h1>لوحة إدارة Beauty Home Service</h1><p>إدارة الطلبات وخبيرات التجميل والمواقع والخدمات</p></div><div className="header-actions"><span className="muted">{adminUser?.name || adminUser?.email}</span><button onClick={load}>تحديث</button><button className="secondary" onClick={logout}>خروج</button></div></header>
     {message && <div className="message">{message}</div>}
+    {selectedBooking && <BookingDetailsModal booking={selectedBooking} catalog={catalog} beauticians={beauticians} updateStatus={updateStatus} assignBeautician={assignBeautician} close={()=>setSelectedBooking(null)} />}
     <section className="cards"><Card title="كل الطلبات" value={dashboard.total_bookings ?? 0}/><Card title="طلبات جديدة" value={dashboard.new_bookings ?? 0}/><Card title="طلبات اليوم" value={dashboard.today_bookings ?? 0}/><Card title="بدون خبيرة" value={dashboard.unassigned_bookings ?? 0}/><Card title="خبيرات فعالات" value={dashboard.active_beauticians ?? dashboard.active_artists ?? 0}/></section>
 
     <CatalogPanel title="إدارة المواقع: المناطق والمدن والأحياء" catalog={catalog} load={load} api={api} setMessage={setMessage} />
@@ -153,13 +199,40 @@ function App() {
       <h3>استيراد من SPL National Address API</h3><p className="muted">يحتاج Access Token من بوابة العنوان الوطني. ابدأ بالمناطق، ثم المدن، ثم أحياء مدينة محددة لتجنب حدود الاشتراك.</p>
       <div className="grid4"><Field label="SPL API Key"><TextInput value={splKey} onChange={setSplKey} placeholder="اتركه فارغاً إذا موجود في SPL_API_KEY" /></Field><Field label="نوع الاستيراد"><Select value={splMode} onChange={setSplMode}><option value="regions">المناطق</option><option value="cities">المدن</option><option value="districts">أحياء مدينة</option><option value="all">المناطق والمدن</option></Select></Field><Field label="المنطقة للمدن"><Select value={splRegionId} onChange={setSplRegionId}><OptionList items={catalog.regions} empty="كل المناطق" /></Select></Field><Field label="المدينة للأحياء"><Select value={splCityId} onChange={setSplCityId}><OptionList items={catalog.cities} empty="اختر المدينة" /></Select></Field></div><button onClick={importSpl}>استيراد من SPL</button></section>
 
-    <section className="panel"><h2>إنشاء طلب جديد</h2><form className="grid4" onSubmit={createBooking}><Field label="اسم العميلة"><TextInput required value={bookingForm.name} onChange={v=>setBooking('name',v)} /></Field><Field label="الجوال"><TextInput required value={bookingForm.phone} onChange={v=>setBooking('phone',v)} /></Field><Field label="المنطقة"><Select required value={bookingForm.region_id} onChange={v=>setBooking('region_id',v)}><OptionList items={catalog.regions}/></Select></Field><Field label="المدينة"><Select required value={bookingForm.city_id} onChange={v=>setBooking('city_id',v)}><OptionList items={citiesForBooking}/></Select></Field><Field label="الحي"><Select required value={bookingForm.district_id} onChange={v=>setBooking('district_id',v)}><OptionList items={districtsForBooking}/></Select></Field><Field label="قسم الخدمة"><Select required value={bookingForm.service_category_id} onChange={v=>setBooking('service_category_id',v)}><OptionList items={catalog.service_categories}/></Select></Field><Field label="الخدمة"><Select required value={bookingForm.service_id} onChange={v=>setBooking('service_id',v)}><OptionList items={servicesForBooking} label="display_name"/></Select></Field><Field label="نوع المناسبة"><TextInput value={bookingForm.event_type} onChange={v=>setBooking('event_type',v)} /></Field><Field label="التاريخ"><TextInput type="date" required value={bookingForm.booking_date} onChange={v=>setBooking('booking_date',v)} /></Field><Field label="الوقت"><TextInput type="time" required value={bookingForm.booking_time} onChange={v=>setBooking('booking_time',v)} /></Field><Field label="عدد الأشخاص"><TextInput type="number" value={bookingForm.people_count} onChange={v=>setBooking('people_count',Number(v)||1)} /></Field><Field label="العنوان"><TextInput value={bookingForm.address} onChange={v=>setBooking('address',v)} /></Field><Field label="ملاحظات"><textarea value={bookingForm.customer_notes} onChange={e=>setBooking('customer_notes',e.target.value)} /></Field><div className="actions"><button>إنشاء الطلب</button></div></form></section>
+    <section className="panel"><h2>إنشاء طلب جديد</h2><form className="grid4" onSubmit={createBooking}><Field label="اسم العميلة"><TextInput required value={bookingForm.name} onChange={v=>setBooking('name',v)} /></Field><Field label="الجوال"><TextInput required value={bookingForm.phone} onChange={v=>setBooking('phone',v)} /></Field><Field label="المنطقة"><Select required value={bookingForm.region_id} onChange={v=>setBooking('region_id',v)}><OptionList items={catalog.regions}/></Select></Field><Field label="المدينة"><Select required value={bookingForm.city_id} onChange={v=>setBooking('city_id',v)}><OptionList items={citiesForBooking}/></Select></Field><Field label="الحي"><Select required value={bookingForm.district_id} onChange={v=>setBooking('district_id',v)}><OptionList items={districtsForBooking}/></Select></Field><Field label="قسم الخدمة"><Select required value={bookingForm.service_category_id} onChange={v=>setBooking('service_category_id',v)}><OptionList items={catalog.service_categories}/></Select></Field><Field label="الخدمة"><Select required value={bookingForm.service_id} onChange={v=>setBooking('service_id',v)}><OptionList items={servicesForBooking} label="display_name"/></Select></Field><Field label="نوع المناسبة"><TextInput value={bookingForm.event_type} onChange={v=>setBooking('event_type',v)} /></Field><Field label="التاريخ"><TextInput type="date" required value={bookingForm.booking_date} onChange={v=>setBooking('booking_date',v)} /></Field><Field label="الوقت"><TextInput type="time" required value={bookingForm.booking_time} onChange={v=>setBooking('booking_time',v)} /></Field><Field label="عدد الأشخاص"><TextInput type="number" value={bookingForm.people_count} onChange={v=>setBooking('people_count',Number(v)||1)} /></Field><Field label="العنوان"><TextInput value={bookingForm.address} onChange={v=>setBooking('address',v)} /></Field><Field label="رابط صورة التصميم"><TextInput value={bookingForm.design_image_url} onChange={v=>setBooking('design_image_url',v)} placeholder="اختياري" /></Field><Field label="ملاحظات"><textarea value={bookingForm.customer_notes} onChange={e=>setBooking('customer_notes',e.target.value)} /></Field><div className="actions"><button>إنشاء الطلب</button></div></form></section>
 
     <section className="panel"><h2>إدارة خبيرات التجميل</h2><form className="grid4" onSubmit={saveBeautician}><Field label="اسم خبيرة التجميل"><TextInput required value={beauticianForm.name} onChange={v=>setBeautician('name',v)} /></Field><Field label="الجوال"><TextInput required value={beauticianForm.phone} onChange={v=>setBeautician('phone',v)} /></Field><Field label="المنطقة"><Select value={beauticianForm.region_id} onChange={v=>setBeautician('region_id',v)}><OptionList items={catalog.regions}/></Select></Field><Field label="المدينة"><Select value={beauticianForm.city_id} onChange={v=>setBeautician('city_id',v)}><OptionList items={citiesForBeautician}/></Select></Field><Field label="الخبرة الأساسية"><Select value={beauticianForm.main_expertise_service_id} onChange={v=>setBeautician('main_expertise_service_id',v)}><OptionList items={catalog.services} label="display_name" /></Select></Field><Field label="الأحياء التي تغطيها"><TextInput value={beauticianForm.districts} onChange={v=>setBeautician('districts',v)} /></Field><Field label="المهارات"><TextInput value={beauticianForm.skills} onChange={v=>setBeautician('skills',v)} /></Field><Field label="التقييم"><TextInput type="number" value={beauticianForm.rating} onChange={v=>setBeautician('rating',Number(v)||5)} /></Field><Field label="الحالة"><Select value={beauticianForm.status} onChange={v=>setBeautician('status',v)}><option value="active">فعالة</option><option value="inactive">غير فعالة</option></Select></Field><Field label="نبذة"><textarea value={beauticianForm.bio} onChange={e=>setBeautician('bio',e.target.value)} /></Field><div className="actions"><button>{editing.type==='beautician' ? 'حفظ التعديل' : 'إضافة خبيرة'}</button></div></form>
       <table><thead><tr><th>الاسم</th><th>الجوال</th><th>المنطقة</th><th>المدينة</th><th>الخبرة الأساسية</th><th>التقييم</th><th>إجراء</th></tr></thead><tbody>{beauticians.map(a=><tr key={a.id}><td>{a.name}</td><td>{a.phone}</td><td>{a.region_name||'-'}</td><td>{a.city_name||'-'}</td><td>{a.main_expertise_name||'-'}</td><td>{a.review_rating||a.rating||'-'}</td><td><button onClick={()=>{setBeauticianForm({...emptyBeautician,...a});setEditing({type:'beautician',id:a.id});}}>تعديل</button><button className="danger" onClick={()=>deleteItem('/admin/beauticians',a.id,'خبيرة التجميل')}>حذف</button></td></tr>)}</tbody></table></section>
 
-    <section className="panel"><h2>الطلبات</h2><div className="filters"><input placeholder="بحث" value={filters.q} onChange={e=>setFilters({...filters,q:e.target.value})}/><select value={filters.status} onChange={e=>setFilters({...filters,status:e.target.value})}><option value="">كل الحالات</option>{statusOptions.map(([k,v])=><option key={k} value={k}>{v}</option>)}</select><select value={filters.payment} onChange={e=>setFilters({...filters,payment:e.target.value})}><option value="">كل الدفع</option>{paymentOptions.map(([k,v])=><option key={k} value={k}>{v}</option>)}</select><select value={filters.region_id} onChange={e=>setFilters({...filters,region_id:e.target.value,city_id:''})}><OptionList items={catalog.regions} empty="كل المناطق" /></select><select value={filters.city_id} onChange={e=>setFilters({...filters,city_id:e.target.value})}><OptionList items={catalog.cities.filter(c=>!filters.region_id||c.region_id===filters.region_id)} empty="كل المدن" /></select></div><p className="muted">المعروض: {filteredBookings.length} من {bookings.length}</p><table><thead><tr><th>رقم</th><th>العميلة</th><th>الجوال</th><th>الموقع</th><th>الخدمة</th><th>خبيرة التجميل</th><th>التاريخ</th><th>الحالة</th><th>الدفع</th><th>إجراء</th></tr></thead><tbody>{filteredBookings.map((b,i)=><tr key={b.id}><td>{i+1}</td><td>{b.customer_name||'-'}</td><td>{b.customer_phone||'-'}</td><td>{b.region_name||'-'} / {b.city_name||'-'} / {b.district_name||'-'}</td><td>{b.service_category_name||'-'} / {b.service_name||'-'}</td><td>{b.artist_name||'-'}</td><td>{formatDate(b.booking_date)} {formatTime(b.booking_time)}</td><td><span className="status">{statusLabels[b.status]||b.status}</span></td><td>{paymentLabels[b.payment_status||'unpaid']}</td><td><select value={b.status} onChange={e=>updateStatus(b.id,e.target.value)}>{statusOptions.map(([k,v])=><option key={k} value={k}>{v}</option>)}</select><select value={b.assigned_artist_id||''} onChange={e=>assignBeautician(b.id,e.target.value)}><option value="">تعيين خبيرة</option>{beauticians.filter(a=>a.status==='active').map(a=><option key={a.id} value={a.id}>{a.name}</option>)}</select><a className="mini" href={whatsapp(b.customer_phone, `مرحباً، بخصوص طلبك في Beauty Home Service`)} target="_blank">واتساب</a><button className="danger" onClick={()=>deleteItem('/admin/bookings',b.id,'الطلب')}>حذف</button></td></tr>)}</tbody></table></section>
+    <section className="panel"><h2>الطلبات</h2><div className="filters"><input placeholder="بحث" value={filters.q} onChange={e=>setFilters({...filters,q:e.target.value})}/><select value={filters.status} onChange={e=>setFilters({...filters,status:e.target.value})}><option value="">كل الحالات</option>{statusOptions.map(([k,v])=><option key={k} value={k}>{v}</option>)}</select><select value={filters.payment} onChange={e=>setFilters({...filters,payment:e.target.value})}><option value="">كل الدفع</option>{paymentOptions.map(([k,v])=><option key={k} value={k}>{v}</option>)}</select><select value={filters.region_id} onChange={e=>setFilters({...filters,region_id:e.target.value,city_id:''})}><OptionList items={catalog.regions} empty="كل المناطق" /></select><select value={filters.city_id} onChange={e=>setFilters({...filters,city_id:e.target.value})}><OptionList items={catalog.cities.filter(c=>!filters.region_id||c.region_id===filters.region_id)} empty="كل المدن" /></select></div><p className="muted">المعروض: {filteredBookings.length} من {bookings.length}</p><table><thead><tr><th>رقم</th><th>العميلة</th><th>الجوال</th><th>الموقع</th><th>الخدمة</th><th>خبيرة التجميل</th><th>التاريخ</th><th>الحالة</th><th>الدفع</th><th>إجراء</th></tr></thead><tbody>{filteredBookings.map((b,i)=><tr key={b.id}><td>{i+1}</td><td>{b.customer_name||'-'}</td><td>{b.customer_phone||'-'}</td><td>{b.region_name||'-'} / {b.city_name||'-'} / {b.district_name||'-'}</td><td>{b.service_category_name||'-'} / {b.service_name||'-'}</td><td>{b.artist_name||'-'}</td><td>{formatDate(b.booking_date)} {formatTime(b.booking_time)}</td><td><span className="status">{statusLabels[b.status]||b.status}</span></td><td>{paymentLabels[b.payment_status||'unpaid']}</td><td><button onClick={()=>setSelectedBooking(b)}>تفاصيل</button><select value={b.status} onChange={e=>updateStatus(b.id,e.target.value)}>{statusOptions.map(([k,v])=><option key={k} value={k}>{v}</option>)}</select><select value={b.assigned_artist_id||''} onChange={e=>assignBeautician(b.id,e.target.value)}><option value="">تعيين خبيرة</option>{beauticians.filter(a=>a.status==='active').map(a=><option key={a.id} value={a.id}>{a.name}</option>)}</select><a className="mini" href={whatsapp(b.customer_phone, `مرحباً، بخصوص طلبك في Beauty Home Service`)} target="_blank">واتساب</a><button className="danger" onClick={()=>deleteItem('/admin/bookings',b.id,'الطلب')}>حذف</button></td></tr>)}</tbody></table></section>
   </main>;
+}
+
+
+function BookingDetailsModal({ booking, beauticians, updateStatus, assignBeautician, close }) {
+  return <div className="modal-backdrop">
+    <div className="modal-card">
+      <div className="modal-head"><h2>تفاصيل الطلب</h2><button onClick={close}>إغلاق</button></div>
+      <div className="detail-grid">
+        <p><b>رقم الطلب:</b> {booking.id}</p>
+        <p><b>العميلة:</b> {booking.customer_name || '-'}</p>
+        <p><b>الجوال:</b> {booking.customer_phone || '-'}</p>
+        <p><b>الموقع:</b> {booking.region_name || '-'} / {booking.city_name || '-'} / {booking.district_name || '-'}</p>
+        <p><b>الخدمة:</b> {booking.service_category_name || '-'} / {booking.service_name || '-'}</p>
+        <p><b>التاريخ:</b> {formatDate(booking.booking_date)} {formatTime(booking.booking_time)}</p>
+        <p><b>العنوان:</b> {booking.address || '-'}</p>
+        <p><b>ملاحظات العميلة:</b> {booking.customer_notes || '-'}</p>
+        <p><b>حالة الدفع:</b> {paymentLabels[booking.payment_status || 'unpaid']}</p>
+      </div>
+      {booking.design_image_url && <div className="image-box"><b>صورة التصميم:</b><br/><a href={booking.design_image_url} target="_blank">فتح الصورة</a></div>}
+      <div className="grid3">
+        <Field label="تغيير الحالة"><Select value={booking.status} onChange={v=>updateStatus(booking.id, v)}>{statusOptions.map(([k,v])=><option key={k} value={k}>{v}</option>)}</Select></Field>
+        <Field label="تعيين خبيرة تجميل"><Select value={booking.assigned_artist_id || ''} onChange={v=>assignBeautician(booking.id, v)}><option value="">بدون تعيين</option>{beauticians.filter(a=>a.status==='active').map(a=><option key={a.id} value={a.id}>{a.name}</option>)}</Select></Field>
+        <a className="button-link" href={whatsapp(booking.customer_phone, `مرحباً، بخصوص طلبك في Beauty Home Service`)} target="_blank">تواصل واتساب</a>
+      </div>
+      <div className="timeline"><b>تسلسل الحالة:</b><span>طلب جديد</span><span>جاري المراجعة</span><span>تم التأكيد</span><span>تم التعيين</span><span>مكتمل</span></div>
+    </div>
+  </div>;
 }
 
 function CatalogPanel({ catalog, api, load, setMessage }) {

@@ -2,11 +2,16 @@ import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import { query } from './db.js';
+import jwt from 'jsonwebtoken';
+import bcrypt from 'bcryptjs';
 
 dotenv.config();
 
 const app = express();
 const PORT = process.env.PORT || 4000;
+const JWT_SECRET = process.env.JWT_SECRET || 'beauty-home-service-local-secret';
+const DEFAULT_ADMIN_EMAIL = process.env.ADMIN_EMAIL || 'admin@beauty.local';
+const DEFAULT_ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'Beauty@12345';
 
 app.use(cors());
 app.use(express.json({ limit: '20mb' }));
@@ -122,6 +127,30 @@ async function ensureV14Schema() {
       updated_at TIMESTAMP DEFAULT NOW()
     )
   `);
+
+
+  await query(`
+    CREATE TABLE IF NOT EXISTS admin_users (
+      id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+      name VARCHAR(160) NOT NULL DEFAULT 'Admin',
+      email VARCHAR(190) UNIQUE NOT NULL,
+      password_hash TEXT NOT NULL,
+      role VARCHAR(40) NOT NULL DEFAULT 'admin',
+      status VARCHAR(20) NOT NULL DEFAULT 'active',
+      created_at TIMESTAMP DEFAULT NOW(),
+      updated_at TIMESTAMP DEFAULT NOW()
+    )
+  `);
+
+  const adminCount = await query(`SELECT COUNT(*)::int AS count FROM admin_users`);
+  if (adminCount.rows[0].count === 0) {
+    const passwordHash = await bcrypt.hash(DEFAULT_ADMIN_PASSWORD, 10);
+    await query(
+      `INSERT INTO admin_users (name, email, password_hash, role, status) VALUES ($1,$2,$3,'admin','active')`,
+      ['System Admin', DEFAULT_ADMIN_EMAIL.toLowerCase(), passwordHash]
+    );
+    console.log(`Default admin created: ${DEFAULT_ADMIN_EMAIL}`);
+  }
 
   await query(`CREATE INDEX IF NOT EXISTS idx_cities_region ON cities(region_id)`);
   await query(`CREATE INDEX IF NOT EXISTS idx_districts_city ON districts(city_id)`);
@@ -264,8 +293,42 @@ function selectNameExpression(alias, fallback = 'name') {
   return `COALESCE(${alias}.name_ar, ${alias}.${fallback})`;
 }
 
+
+function signAdminToken(user) {
+  return jwt.sign({ id: user.id, email: user.email, role: user.role, name: user.name }, JWT_SECRET, { expiresIn: '12h' });
+}
+
+function authenticateAdmin(req, res, next) {
+  const header = req.headers.authorization || '';
+  const token = header.startsWith('Bearer ') ? header.slice(7) : null;
+  if (!token) return res.status(401).json({ error: 'Admin login required' });
+  try {
+    req.admin = jwt.verify(token, JWT_SECRET);
+    return next();
+  } catch (_) {
+    return res.status(401).json({ error: 'Invalid or expired admin session' });
+  }
+}
+
+app.post('/api/admin/login', async (req, res) => {
+  try {
+    const email = String(req.body.email || '').trim().toLowerCase();
+    const password = String(req.body.password || '');
+    if (!email || !password) return res.status(400).json({ error: 'Email and password are required' });
+    const result = await query(`SELECT * FROM admin_users WHERE email=$1 AND status='active' LIMIT 1`, [email]);
+    const user = result.rows[0];
+    if (!user) return res.status(401).json({ error: 'Invalid login details' });
+    const ok = await bcrypt.compare(password, user.password_hash);
+    if (!ok) return res.status(401).json({ error: 'Invalid login details' });
+    const token = signAdminToken(user);
+    res.json({ ok: true, token, user: { id: user.id, name: user.name, email: user.email, role: user.role } });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to login', details: error.message });
+  }
+});
+
 app.get(['/api/health', '/health'], (req, res) => {
-  res.json({ ok: true, app: 'Beauty Home Service API', version: 'v1.4' });
+  res.json({ ok: true, app: 'Beauty Home Service API', version: 'v1.5' });
 });
 
 app.get('/api/regions', async (req, res) => {
@@ -366,6 +429,11 @@ app.post('/api/bookings', async (req, res) => {
     console.error('Create booking error:', error);
     res.status(500).json({ error: 'Failed to create booking', details: error.message });
   }
+});
+
+app.use('/api/admin', (req, res, next) => {
+  if (req.path === '/login') return next();
+  return authenticateAdmin(req, res, next);
 });
 
 app.get('/api/admin/dashboard', async (req, res) => {

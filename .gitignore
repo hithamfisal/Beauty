@@ -20,6 +20,7 @@ build/
 
 # Flutter / Dart
 .dart_tool/
+**/.dart_tool/
 .flutter-plugins
 .flutter-plugins-dependencies
 .packages
@@ -47,6 +48,6 @@ Thumbs.db
 # Vercel local
 .vercel/
 
-# Backups / generated files
+# Backups / temp
 *.bak
 *.tmp

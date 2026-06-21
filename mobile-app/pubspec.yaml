@@ -1,7 +1,7 @@
 name: beauty_home_service
-description: Beauty Home Service customer app v1.4
+description: Beauty Home Service customer app v1.5
 publish_to: 'none'
-version: 0.4.0+4
+version: 0.5.0+5
 
 environment:
   sdk: '>=3.0.0 <4.0.0'
