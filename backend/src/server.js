@@ -387,11 +387,6 @@ async function ensureV21PaymentSchema() {
   await query(`CREATE INDEX IF NOT EXISTS idx_payment_records_booking ON payment_records(booking_id)`);
 }
 
-function normalizeBookingStatus(status) {
-  if (status === 'artist_assigned') return 'beautician_assigned';
-  return status || 'new';
-}
-
 const BOOKING_STATUS_LABELS = {
   new: 'جديد',
   under_review: 'قيد المراجعة',
@@ -402,6 +397,24 @@ const BOOKING_STATUS_LABELS = {
   completed: 'مكتمل',
   cancelled: 'ملغي'
 };
+
+const BOOKING_STATUS_ALIASES = {
+  artist_assigned: 'beautician_assigned',
+  assigned: 'beautician_assigned',
+  pending: 'under_review',
+  review: 'under_review',
+  waiting: 'waiting_customer_confirmation',
+  complete: 'completed',
+  canceled: 'cancelled',
+  unavailable: 'cancelled'
+};
+const BOOKING_STATUS_VALUES = Object.keys(BOOKING_STATUS_LABELS);
+
+function normalizeBookingStatus(status) {
+  const raw = String(status || 'new').trim();
+  const normalized = BOOKING_STATUS_ALIASES[raw] || raw;
+  return BOOKING_STATUS_VALUES.includes(normalized) ? normalized : null;
+}
 
 async function logBookingEvent(bookingId, eventType, title, description, actorType = 'system', actorName = null, metadata = null) {
   if (!bookingId) return null;
@@ -716,14 +729,40 @@ app.get('/api/admin/bookings/:id', async (req, res) => {
 
 app.patch('/api/admin/bookings/:id/status', async (req, res) => {
   try {
-    const requestedStatus = normalizeBookingStatus(req.body.status);
+    const requestedStatus = normalizeBookingStatus(req.body.status || req.body.new_status);
+    if (!requestedStatus) {
+      return res.status(400).json({
+        error: 'Invalid booking status',
+        details: 'حالة الطلب غير صحيحة.',
+        allowed_statuses: BOOKING_STATUS_VALUES
+      });
+    }
+
     const current = await query(`SELECT status FROM bookings WHERE id=$1`, [req.params.id]);
     if (!current.rows[0]) return res.status(404).json({ error: 'Booking not found' });
-    const result = await query(`UPDATE bookings SET status=$1, admin_notes=COALESCE($2,admin_notes), last_status_change_at=NOW(), confirmed_at=CASE WHEN $1='confirmed' THEN NOW() ELSE confirmed_at END, completed_at=CASE WHEN $1='completed' THEN NOW() ELSE completed_at END, cancelled_at=CASE WHEN $1='cancelled' THEN NOW() ELSE cancelled_at END, updated_at=NOW() WHERE id=$3 RETURNING *`, [requestedStatus, req.body.admin_notes || null, req.params.id]);
-    await query(`INSERT INTO booking_status_history (booking_id, old_status, new_status, changed_by, note) VALUES ($1,$2,$3,'admin',$4)`, [req.params.id, current.rows[0].status, requestedStatus, nullable(req.body.note)]);
-    await logBookingEvent(req.params.id, 'status_changed', 'تم تغيير حالة الطلب', `${BOOKING_STATUS_LABELS[current.rows[0].status] || current.rows[0].status} → ${BOOKING_STATUS_LABELS[requestedStatus] || requestedStatus}`, 'admin', req.admin?.email || null);
-    res.json(result.rows[0]);
-  } catch (error) { res.status(500).json({ error: 'Failed to update booking status', details: error.message }); }
+
+    const result = await query(`
+      UPDATE bookings SET
+        status=$1,
+        admin_notes=COALESCE($2,admin_notes),
+        last_status_change_at=NOW(),
+        confirmed_at=CASE WHEN $1='confirmed' THEN COALESCE(confirmed_at,NOW()) ELSE confirmed_at END,
+        completed_at=CASE WHEN $1='completed' THEN COALESCE(completed_at,NOW()) ELSE completed_at END,
+        cancelled_at=CASE WHEN $1='cancelled' THEN COALESCE(cancelled_at,NOW()) ELSE cancelled_at END,
+        updated_at=NOW()
+      WHERE id=$3 RETURNING *
+    `, [requestedStatus, req.body.admin_notes || null, req.params.id]);
+
+    if (current.rows[0].status !== requestedStatus) {
+      await query(`INSERT INTO booking_status_history (booking_id, old_status, new_status, changed_by, note) VALUES ($1,$2,$3,'admin',$4)`, [req.params.id, current.rows[0].status, requestedStatus, nullable(req.body.note)]);
+      await logBookingEvent(req.params.id, 'status_changed', 'تم تغيير حالة الطلب', `${BOOKING_STATUS_LABELS[current.rows[0].status] || current.rows[0].status || '-'} → ${BOOKING_STATUS_LABELS[requestedStatus] || requestedStatus}`, 'admin', req.admin?.email || null);
+    }
+
+    res.json({ ok: true, booking: result.rows[0], status: requestedStatus, label: BOOKING_STATUS_LABELS[requestedStatus] });
+  } catch (error) {
+    console.error('Update booking status error:', error);
+    res.status(500).json({ error: 'Failed to update booking status', details: error.message });
+  }
 });
 
 app.patch('/api/admin/bookings/:id/details', async (req, res) => {
@@ -808,7 +847,7 @@ app.patch('/api/admin/bookings/:id/assign-artist', async (req, res) => {
       const conflicts = await query(`SELECT id, booking_date, booking_time, status FROM bookings WHERE assigned_artist_id=$1 AND id<>$2 AND booking_date=$3 AND status NOT IN ('completed','cancelled','unavailable')`, [artist_id, req.params.id, current.rows[0].booking_date]);
       if (conflicts.rows.length) return res.status(409).json({ error: 'يوجد تعارض في جدول خبيرة التجميل لنفس اليوم.', conflict_count: conflicts.rows.length, conflicts: conflicts.rows });
     }
-    const newStatus = artist_id ? 'beautician_assigned' : normalizeBookingStatus(current.rows[0].status);
+    const newStatus = artist_id ? 'beautician_assigned' : (normalizeBookingStatus(current.rows[0].status) || 'under_review');
     const result = await query(`UPDATE bookings SET assigned_artist_id=$1, status=$2, last_status_change_at=NOW(), updated_at=NOW() WHERE id=$3 RETURNING *`, [artist_id || null, newStatus, req.params.id]);
     await query(`INSERT INTO booking_status_history (booking_id, old_status, new_status, changed_by, note) VALUES ($1,$2,$3,'admin',$4)`, [req.params.id, current.rows[0].status, newStatus, artist_id ? 'تم تعيين خبيرة التجميل' : 'تم إلغاء تعيين خبيرة التجميل']);
     await logBookingEvent(req.params.id, 'beautician_assigned', artist_id ? 'تم تعيين خبيرة التجميل' : 'تم إلغاء تعيين الخبيرة', artist_id || '', 'admin', req.admin?.email || null);

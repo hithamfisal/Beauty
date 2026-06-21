@@ -61,8 +61,10 @@ function App() {
     if (adminToken && path.startsWith('/admin')) headers.Authorization = `Bearer ${adminToken}`;
     const res = await fetch(`${API}${path}`, { ...options, headers });
     const text = await res.text();
-    const data = text ? JSON.parse(text) : null;
-    if (!res.ok) throw new Error(data?.error || data?.details || 'Request failed');
+    let data = null;
+    try { data = text ? JSON.parse(text) : null; }
+    catch { data = { error: text?.slice(0, 300) || 'Invalid server response' }; }
+    if (!res.ok) throw new Error(data?.details || data?.error || 'Request failed');
     return data;
   }
 
@@ -112,7 +114,20 @@ function App() {
   async function saveBeautician(e) { e.preventDefault(); try { const payload = clean(beauticianForm); if (editing.type === 'beautician') await api(`/admin/beauticians/${editing.id}`, { method:'PATCH', body: JSON.stringify(payload) }); else await api('/admin/beauticians', { method:'POST', body: JSON.stringify(payload) }); setBeauticianForm(emptyBeautician); setEditing({}); setMessage('تم حفظ خبيرة التجميل.'); await load(); } catch(e) { setMessage(`تعذر حفظ خبيرة التجميل: ${e.message}`); } }
   async function savePortfolio(e) { e.preventDefault(); try { const payload = clean(portfolioForm); if (editing.type === 'portfolio') await api(`/admin/beautician-portfolio/${editing.id}`, { method:'PATCH', body: JSON.stringify(payload) }); else await api('/admin/beautician-portfolio', { method:'POST', body: JSON.stringify(payload) }); setPortfolioForm(emptyPortfolio); setEditing({}); setMessage('تم حفظ نموذج العمل.'); await load(); } catch(e) { setMessage(`تعذر حفظ نموذج العمل: ${e.message}`); } }
   async function deleteItem(path, id, label='العنصر') { if (!confirm(`تأكيد حذف ${label}؟`)) return; try { await api(`${path}/${id}`, { method:'DELETE' }); setMessage('تم الحذف.'); await load(); } catch(e) { setMessage(`تعذر الحذف: ${e.message}`); } }
-  async function updateStatus(id, status) { await api(`/admin/bookings/${id}/status`, { method:'PATCH', body: JSON.stringify({ status }) }); await load(); }
+  async function updateStatus(id, status) {
+    try {
+      setMessage('');
+      const res = await api(`/admin/bookings/${id}/status`, { method:'PATCH', body: JSON.stringify({ status }) });
+      const updated = res?.booking || res;
+      setBookings(prev => prev.map(b => b.id === id ? { ...b, ...updated, status } : b));
+      if (selectedBooking?.id === id) await openBookingDetails({ id });
+      await load();
+      setMessage('تم تحديث حالة الطلب.');
+    } catch(e) {
+      setMessage(`تعذر تحديث حالة الطلب: ${e.message}`);
+      await load();
+    }
+  }
   async function updatePayment(id, payment_status) { await api(`/admin/bookings/${id}/payment`, { method:'PATCH', body: JSON.stringify({ payment_status }) }); await load(); }
   async function updatePaymentDetails(b) {
     const payment_status = prompt('حالة الدفع: unpaid / deposit_paid / paid / refunded', b.payment_status || 'unpaid');
