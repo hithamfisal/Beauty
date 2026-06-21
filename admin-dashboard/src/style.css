@@ -9,3 +9,5 @@ button.secondary{background:#fff;color:#6B3F19;border:1px solid #6B3F19}
 .modal-card{background:#fff;max-width:900px;width:min(900px,100%);max-height:90vh;overflow:auto;border-radius:22px;padding:22px;box-shadow:0 24px 80px rgba(0,0,0,.28)}
 .modal-head{display:flex;align-items:center;justify-content:space-between;gap:12px;border-bottom:1px solid #eee;padding-bottom:10px;margin-bottom:16px}
 .detail-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:8px 18px}.detail-grid p{margin:.25rem 0}.image-box{padding:12px;border:1px dashed #c7a677;border-radius:14px;background:#fff8ed;margin:12px 0}.button-link{display:inline-flex;align-items:center;justify-content:center;text-decoration:none;background:#6B3F19;color:#fff;border-radius:12px;padding:10px 12px}.timeline{display:flex;gap:8px;flex-wrap:wrap;margin-top:14px}.timeline span{background:#f3e5d0;border:1px solid #e4cba6;border-radius:999px;padding:6px 10px}
+
+.payment-select { min-width: 130px; }

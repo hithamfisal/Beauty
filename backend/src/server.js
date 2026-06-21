@@ -509,6 +509,18 @@ app.patch('/api/admin/bookings/:id/details', async (req, res) => {
   } catch (error) { res.status(500).json({ error: 'Failed to update booking details', details: error.message }); }
 });
 
+app.patch('/api/admin/bookings/:id/payment', async (req, res) => {
+  try {
+    const allowed = ['unpaid', 'deposit_paid', 'paid', 'refunded'];
+    const paymentStatus = req.body.payment_status || 'unpaid';
+    if (!allowed.includes(paymentStatus)) return res.status(400).json({ error: 'Invalid payment status' });
+    const result = await query(`UPDATE bookings SET payment_status=$1, updated_at=NOW() WHERE id=$2 RETURNING *`, [paymentStatus, req.params.id]);
+    if (!result.rows[0]) return res.status(404).json({ error: 'Booking not found' });
+    await query(`INSERT INTO booking_status_history (booking_id, old_status, new_status, changed_by, note) VALUES ($1,$2,$2,'admin',$3)`, [req.params.id, result.rows[0].status, `تم تحديث حالة الدفع إلى ${paymentStatus}`]);
+    res.json(result.rows[0]);
+  } catch (error) { res.status(500).json({ error: 'Failed to update payment status', details: error.message }); }
+});
+
 app.delete('/api/admin/bookings/:id', async (req, res) => {
   try {
     await query(`DELETE FROM booking_status_history WHERE booking_id=$1`, [req.params.id]);
