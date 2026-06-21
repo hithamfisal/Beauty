@@ -36,3 +36,7 @@ select:disabled, button:disabled {
   opacity: 0.65;
   cursor: wait;
 }
+/* v2.2/v2.3 availability, smart assignment and customer account support */
+.field select[multiple]{min-height:135px;padding:10px}
+.danger-text{color:#b42318;font-weight:700}
+.portfolio-card .danger-text{background:#fff0f0;border:1px solid #f0b8b8;border-radius:12px;padding:8px}

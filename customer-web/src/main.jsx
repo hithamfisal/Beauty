@@ -28,6 +28,37 @@ function money(v) { return v == null || v === '' ? '' : `${Number(v).toLocaleStr
 function fmtDate(v) { try { return v ? new Date(v).toLocaleDateString('ar-SA') : '-'; } catch { return v || '-'; } }
 function shortTime(v) { return v ? String(v).slice(0, 5) : '-'; }
 
+const STATUS_LABELS = {
+  new: 'طلب جديد',
+  under_review: 'قيد المراجعة',
+  waiting_customer_confirmation: 'بانتظار تأكيد العميلة',
+  confirmed: 'تم تأكيد الحجز',
+  beautician_assigned: 'تم تعيين خبيرة التجميل',
+  artist_assigned: 'تم تعيين خبيرة التجميل',
+  in_progress: 'قيد التنفيذ',
+  completed: 'مكتمل',
+  cancelled: 'ملغي',
+  pending: 'قيد المراجعة',
+  unavailable: 'غير متاح'
+};
+const PAYMENT_LABELS = {
+  unpaid: 'غير مدفوع',
+  deposit_paid: 'عربون مدفوع',
+  paid: 'مدفوع بالكامل',
+  refunded: 'مسترجع'
+};
+const SOURCE_LABELS = {
+  mobile: 'الجوال',
+  web: 'الويب',
+  admin: 'الإدارة',
+  legacy: 'قديم',
+  unknown: 'غير محدد'
+};
+function statusLabel(v) { return STATUS_LABELS[String(v || '').trim()] || v || '-'; }
+function paymentLabel(v) { return PAYMENT_LABELS[String(v || 'unpaid').trim()] || v || 'غير مدفوع'; }
+function sourceLabel(v, fallback) { return fallback || SOURCE_LABELS[String(v || 'unknown').trim()] || v || 'غير محدد'; }
+
+
 function Select({ value, onChange, children, disabled }) {
   return <select value={value || ''} onChange={e => onChange(e.target.value)} disabled={disabled}>{children}</select>;
 }
@@ -53,12 +84,20 @@ function App() {
   const [selectedBeautician, setSelectedBeautician] = useState(null);
   const [message, setMessage] = useState('');
   const [loading, setLoading] = useState(false);
+  const [customerToken, setCustomerToken] = useState(() => localStorage.getItem('beauty_customer_token') || '');
+  const [customer, setCustomer] = useState(null);
+  const [authPhone, setAuthPhone] = useState('');
+  const [otp, setOtp] = useState('');
+  const [accountBookings, setAccountBookings] = useState([]);
+  const [addresses, setAddresses] = useState([]);
+  const [addressForm, setAddressForm] = useState({ label:'المنزل', region_id:'', city_id:'', district_id:'', address:'', is_default:true });
 
   useEffect(() => { init(); }, []);
   useEffect(() => { loadCities(booking.region_id); }, [booking.region_id]);
   useEffect(() => { loadDistricts(booking.city_id); }, [booking.city_id]);
   useEffect(() => { loadServices(booking.service_category_id); }, [booking.service_category_id]);
-  useEffect(() => { loadBeauticians(); loadPortfolio(); }, [booking.region_id, booking.city_id, booking.service_id, booking.service_category_id]);
+  useEffect(() => { loadBeauticians(); loadPortfolio(); }, [booking.region_id, booking.city_id, booking.district_id, booking.service_id, booking.service_category_id]);
+  useEffect(() => { if (customerToken) loadAccount(); }, [customerToken]);
 
   async function init() {
     try {
@@ -84,8 +123,11 @@ function App() {
       const qs = new URLSearchParams();
       if (booking.region_id) qs.set('region_id', booking.region_id);
       if (booking.city_id) qs.set('city_id', booking.city_id);
+      if (booking.district_id) qs.set('district_id', booking.district_id);
       if (booking.service_id) qs.set('service_id', booking.service_id);
-      const r = await api(`/beauticians${qs.toString() ? `?${qs}` : ''}`);
+      let r = await api(`/beauticians${qs.toString() ? `?${qs}` : ''}`);
+      // لا نترك قائمة اختيار الخبيرة فارغة: إذا لم توجد مطابقة دقيقة نعرض كل الخبيرات المتاحات مع بقاء خيار الدعم.
+      if ((!r || !r.length) && qs.toString()) r = await api('/beauticians');
       setBeauticians(r || []);
     } catch (e) { setMessage(`تعذر تحميل الخبيرات: ${e.message}`); }
   }
@@ -94,7 +136,10 @@ function App() {
       const qs = new URLSearchParams();
       if (booking.service_id) qs.set('service_id', booking.service_id);
       else if (booking.service_category_id) qs.set('category_id', booking.service_category_id);
-      const r = await api(`/portfolio${qs.toString() ? `?${qs}` : ''}`);
+      let r = await api(`/portfolio${qs.toString() ? `?${qs}` : ''}`);
+      // إذا لم توجد نماذج مطابقة للخدمة المحددة، نرجع للقسم ثم للمعرض العام حتى تظهر نماذج للعميلة.
+      if ((!r || !r.length) && booking.service_id && booking.service_category_id) r = await api(`/portfolio?category_id=${booking.service_category_id}`);
+      if ((!r || !r.length) && qs.toString()) r = await api('/portfolio');
       setPortfolio(r || []);
     } catch (e) { setMessage(`تعذر تحميل المعرض: ${e.message}`); }
   }
@@ -148,6 +193,48 @@ function App() {
     finally { setLoading(false); }
   }
 
+  async function requestOtp(e) {
+    e?.preventDefault?.(); setLoading(true); setMessage('');
+    try {
+      const r = await api('/customer/auth/request-otp', { method:'POST', body: JSON.stringify({ phone: authPhone }) });
+      setMessage(`تم إرسال رمز التحقق. رمز التجربة: ${r.dev_otp || 'تم الإرسال'}`);
+    } catch(e) { setMessage(`تعذر إرسال رمز التحقق: ${e.message}`); }
+    finally { setLoading(false); }
+  }
+
+  async function verifyOtp(e) {
+    e?.preventDefault?.(); setLoading(true); setMessage('');
+    try {
+      const r = await api('/customer/auth/verify-otp', { method:'POST', body: JSON.stringify({ phone: authPhone, otp }) });
+      localStorage.setItem('beauty_customer_token', r.token);
+      setCustomerToken(r.token); setCustomer(r.customer); setMessage('تم تسجيل الدخول لحساب العميلة.');
+      await loadAccount(r.token);
+    } catch(e) { setMessage(`تعذر التحقق: ${e.message}`); }
+    finally { setLoading(false); }
+  }
+
+  async function loadAccount(token = customerToken) {
+    if (!token) return;
+    try {
+      const headers = { Authorization: `Bearer ${token}` };
+      const [me, myBookings, myAddresses] = await Promise.all([
+        api('/customer/me', { headers }), api('/customer/my-bookings', { headers }), api('/customer/addresses', { headers })
+      ]);
+      setCustomer(me); setAccountBookings(myBookings || []); setAddresses(myAddresses || []);
+    } catch(e) { setMessage(`تعذر تحميل الحساب: ${e.message}`); }
+  }
+
+  async function saveAddress(e) {
+    e.preventDefault(); setLoading(true);
+    try {
+      await api('/customer/addresses', { method:'POST', headers:{ Authorization:`Bearer ${customerToken}` }, body: JSON.stringify(addressForm) });
+      setMessage('تم حفظ العنوان.'); setAddressForm({ label:'المنزل', region_id:'', city_id:'', district_id:'', address:'', is_default:true }); await loadAccount();
+    } catch(e) { setMessage(`تعذر حفظ العنوان: ${e.message}`); }
+    finally { setLoading(false); }
+  }
+
+  function logoutCustomer() { localStorage.removeItem('beauty_customer_token'); setCustomerToken(''); setCustomer(null); setAccountBookings([]); setAddresses([]); }
+
   return <div className="app">
     <header className="hero">
       <nav>
@@ -156,7 +243,7 @@ function App() {
           <button onClick={() => setTab('home')}>الرئيسية</button>
           <button onClick={() => setTab('booking')}>طلب حجز</button>
           <button onClick={() => setTab('beauticians')}>الخبيرات</button>
-          <button onClick={() => setTab('track')}>متابعة الطلب</button>
+          <button onClick={() => setTab('track')}>متابعة الطلب</button><button onClick={() => setTab('account')}>حسابي</button>
         </div>
       </nav>
       <section className="heroText"><span>خدمات تجميل منزلية</span><h1>احجزي خدمتك بسهولة وشاهدي أعمال الخبيرات قبل الاختيار</h1><p>واجهة عميلة تعمل على الكمبيوتر والمتصفح وترتبط مباشرة بالسيرفر السحابي.</p><button className="primary" onClick={() => setTab('booking')}>ابدئي طلب حجز</button></section>
@@ -170,6 +257,7 @@ function App() {
     {tab === 'beauticians' && <BeauticiansPage beauticians={beauticians} portfolio={portfolio} openBeautician={openBeautician} />}
     {tab === 'beautician' && <BeauticianDetails data={selectedBeautician} choose={(id) => { setBookingField('preferred_artist_id', id); setTab('booking'); }} />}
     {tab === 'track' && <TrackPage phone={trackingPhone} setPhone={setTrackingPhone} results={trackingResults} submit={trackBookings} />}
+    {tab === 'account' && <AccountPage customerToken={customerToken} customer={customer} authPhone={authPhone} setAuthPhone={setAuthPhone} otp={otp} setOtp={setOtp} requestOtp={requestOtp} verifyOtp={verifyOtp} logoutCustomer={logoutCustomer} bookings={accountBookings} addresses={addresses} addressForm={addressForm} setAddressForm={setAddressForm} saveAddress={saveAddress} regions={regions} cities={cities} districts={districts} />}
 
     <footer>Beauty Home Service © بوابة العميلة</footer>
   </div>;
@@ -200,7 +288,7 @@ function BookingForm({ booking, setBookingField, regions, cities, districts, cat
     <Field label="وقت بديل"><Input type="time" value={booking.alternate_time} onChange={v=>setBookingField('alternate_time',v)} /></Field>
     <Field label="عدد الأشخاص"><Input type="number" min="1" value={booking.people_count} onChange={v=>setBookingField('people_count',v)} /></Field>
     <Field label="طريقة التواصل"><Select value={booking.contact_preference} onChange={v=>setBookingField('contact_preference',v)}><option value="whatsapp">واتساب</option><option value="call">اتصال</option><option value="sms">رسالة SMS</option></Select></Field>
-    <Field label="خبيرة مفضلة"><Select value={booking.preferred_artist_id} onChange={v=>setBookingField('preferred_artist_id',v)}><option value="">اترك الاختيار للدعم</option>{beauticians.map(b=><option key={b.id} value={b.id}>{b.name} {b.review_rating ? `⭐ ${b.review_rating}` : ''}</option>)}</Select></Field>
+    <Field label="خبيرة مفضلة"><Select value={booking.preferred_artist_id} onChange={v=>setBookingField('preferred_artist_id',v)}><option value="">اترك الاختيار للدعم</option>{beauticians.map(b=><option key={b.id} value={b.id}>{b.name} {b.review_rating ? `⭐ ${b.review_rating}` : ''}{b.is_fallback ? ' - اختيار عام' : ''}</option>)}</Select></Field>
     <Field label="العنوان"><Input required value={booking.address} onChange={v=>setBookingField('address',v)} placeholder="تفاصيل العنوان" /></Field>
     <Field label="صورة التصميم"><input type="file" accept="image/*" onChange={e=>uploadImage(e.target.files?.[0])}/>{booking.design_image_url && <small>تم إرفاق الصورة</small>}</Field>
     <Field label="ملاحظات"><TextArea value={booking.customer_notes} onChange={v=>setBookingField('customer_notes',v)} placeholder="أي تفاصيل إضافية" /></Field>
@@ -227,7 +315,15 @@ function BeauticianDetails({ data, choose }) {
   return <main className="container"><section className="profile"><div><h2>{b.name}</h2><p>{b.bio || 'خبيرة تجميل منزلية'}</p><div className="badges"><span><Star size={16}/> {b.review_rating || b.rating || '-'}</span><span>{b.main_expertise_name || 'خدمات تجميل'}</span><span>{b.city_name || 'عدة مدن'}</span></div><button className="primary" onClick={() => choose(b.id)}>اختيار هذه الخبيرة للحجز</button></div></section><section className="panel"><h2>معرض الأعمال</h2><PortfolioGrid items={data.portfolio || []}/></section><section className="panel"><h2>تقييمات العميلات</h2>{(data.reviews || []).length ? data.reviews.map(r => <div className="review" key={r.id}><b>⭐ {r.rating}</b><p>{r.review_text}</p></div>) : <p className="empty">لا توجد تقييمات منشورة حالياً.</p>}</section></main>
 }
 function TrackPage({ phone, setPhone, results, submit }) {
-  return <main className="container"><section className="panel"><h2>متابعة الطلب</h2><form className="track" onSubmit={submit}><Input value={phone} onChange={setPhone} placeholder="رقم الجوال"/><button className="primary"><Search size={18}/> بحث</button></form><div className="bookingList">{results.map(b => <div className="bookingCard" key={b.id}><div><b>{b.booking_number || `طلب #${b.id}`}</b><span>{b.status || '-'}</span></div><p>{b.service_name || '-'} • {fmtDate(b.booking_date)} • {shortTime(b.booking_time)} • {b.booking_source_label || b.booking_source || 'web'}</p><p>{b.region_name || '-'} / {b.city_name || '-'} / {b.district_name || '-'}</p><div className="timeline"><span><CheckCircle2 size={16}/> جديد</span><span><Clock3 size={16}/> {b.status || 'قيد المراجعة'}</span><span><MessageCircle size={16}/> {b.payment_status || 'غير مدفوع'}</span></div></div>)}</div></section></main>
+  return <main className="container"><section className="panel"><h2>متابعة الطلب</h2><form className="track" onSubmit={submit}><Input value={phone} onChange={setPhone} placeholder="رقم الجوال"/><button className="primary"><Search size={18}/> بحث</button></form><div className="bookingList">{results.map(b => <div className="bookingCard" key={b.id}><div><b>{b.booking_number || `طلب #${b.id}`}</b><span>{statusLabel(b.status)}</span></div><p>{b.service_name || '-'} • {fmtDate(b.booking_date)} • {shortTime(b.booking_time)} • {sourceLabel(b.booking_source, b.booking_source_label)}</p><p>{b.region_name || '-'} / {b.city_name || '-'} / {b.district_name || '-'}</p>{b.artist_name && <p>الخبيرة المعينة: {b.artist_name}</p>}{b.preferred_artist_name && <p>الخبيرة المفضلة: {b.preferred_artist_name}</p>}<div className="timeline"><span><CheckCircle2 size={16}/> طلب جديد</span><span><Clock3 size={16}/> {statusLabel(b.status || 'under_review')}</span><span><MessageCircle size={16}/> {paymentLabel(b.payment_status)}</span></div></div>)}</div></section></main>
+}
+
+
+function AccountPage({ customerToken, customer, authPhone, setAuthPhone, otp, setOtp, requestOtp, verifyOtp, logoutCustomer, bookings, addresses, addressForm, setAddressForm, saveAddress, regions, cities, districts }) {
+  const filteredCities = cities.filter(c => !addressForm.region_id || c.region_id === addressForm.region_id);
+  const filteredDistricts = districts.filter(d => !addressForm.city_id || d.city_id === addressForm.city_id);
+  if (!customerToken) return <main className="container"><section className="panel"><h2>حساب العميلة</h2><p className="empty">سجلي الدخول برقم الجوال لعرض طلباتك وعناوينك المحفوظة.</p><form className="track" onSubmit={requestOtp}><input value={authPhone} onChange={e=>setAuthPhone(e.target.value)} placeholder="05xxxxxxxx"/><button className="primary">إرسال رمز التحقق</button></form><form className="track" onSubmit={verifyOtp}><input value={otp} onChange={e=>setOtp(e.target.value)} placeholder="رمز التحقق"/><button className="primary">دخول</button></form></section></main>;
+  return <main className="container"><section className="panel"><h2>حساب العميلة</h2><p>مرحباً {customer?.name || customer?.phone}</p><button onClick={logoutCustomer}>تسجيل خروج</button></section><section className="panel"><h2>طلباتي</h2>{bookings.length ? bookings.map(b=><div className="bookingCard" key={b.id}><div><b>{b.booking_number || b.id}</b><span>{statusLabel(b.status)}</span></div><p>{b.service_name || '-'} • {fmtDate(b.booking_date)} {shortTime(b.booking_time)}</p><p>{b.region_name || '-'} / {b.city_name || '-'} / {b.district_name || '-'}</p></div>) : <p className="empty">لا توجد طلبات في الحساب.</p>}</section><section className="panel"><h2>العناوين المحفوظة</h2>{addresses.map(a=><div className="bookingCard" key={a.id}><b>{a.label}</b><p>{a.region_name||'-'} / {a.city_name||'-'} / {a.district_name||'-'}</p><p>{a.address}</p></div>)}<form className="bookingGrid" onSubmit={saveAddress}><Field label="اسم العنوان"><Input value={addressForm.label} onChange={v=>setAddressForm({...addressForm,label:v})}/></Field><Field label="المنطقة"><Select value={addressForm.region_id} onChange={v=>setAddressForm({...addressForm,region_id:v,city_id:'',district_id:''})}><OptionList items={regions}/></Select></Field><Field label="المدينة"><Select value={addressForm.city_id} onChange={v=>setAddressForm({...addressForm,city_id:v,district_id:''})}><OptionList items={filteredCities}/></Select></Field><Field label="الحي"><Select value={addressForm.district_id} onChange={v=>setAddressForm({...addressForm,district_id:v})}><OptionList items={filteredDistricts}/></Select></Field><Field label="العنوان التفصيلي"><Input required value={addressForm.address} onChange={v=>setAddressForm({...addressForm,address:v})}/></Field><button className="primary">حفظ العنوان</button></form></section></main>;
 }
 
 createRoot(document.getElementById('root')).render(<App />);

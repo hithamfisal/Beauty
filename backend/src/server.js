@@ -461,12 +461,150 @@ async function uploadToCloudinary(imageDataUrl, folder = 'beauty-home-service') 
   return { url: data.secure_url || data.url, provider: 'cloudinary', public_id: data.public_id };
 }
 
+
+
+async function ensureV22V23Schema() {
+  await query(`ALTER TABLE artists ADD COLUMN IF NOT EXISTS availability_status VARCHAR(30) DEFAULT 'available'`);
+  await query(`ALTER TABLE artists ADD COLUMN IF NOT EXISTS working_days JSONB DEFAULT '[0,1,2,3,4,5]'::jsonb`);
+  await query(`ALTER TABLE artists ADD COLUMN IF NOT EXISTS work_start_time TIME DEFAULT '10:00'`);
+  await query(`ALTER TABLE artists ADD COLUMN IF NOT EXISTS work_end_time TIME DEFAULT '22:00'`);
+  await query(`ALTER TABLE artists ADD COLUMN IF NOT EXISTS max_daily_bookings INT DEFAULT 3`);
+  await query(`ALTER TABLE artists ADD COLUMN IF NOT EXISTS coverage_city_ids JSONB DEFAULT '[]'::jsonb`);
+  await query(`ALTER TABLE artists ADD COLUMN IF NOT EXISTS coverage_district_ids JSONB DEFAULT '[]'::jsonb`);
+  await query(`CREATE INDEX IF NOT EXISTS idx_artists_availability_status ON artists(availability_status)`);
+
+  await query(`
+    CREATE TABLE IF NOT EXISTS customer_otp_codes (
+      id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+      customer_id UUID REFERENCES customers(id) ON DELETE CASCADE,
+      phone VARCHAR(40) NOT NULL,
+      otp_code VARCHAR(10) NOT NULL,
+      purpose VARCHAR(40) DEFAULT 'login',
+      expires_at TIMESTAMP NOT NULL,
+      used_at TIMESTAMP,
+      created_at TIMESTAMP DEFAULT NOW()
+    )
+  `);
+  await query(`CREATE INDEX IF NOT EXISTS idx_customer_otp_phone ON customer_otp_codes(phone, expires_at)`);
+
+  await query(`
+    CREATE TABLE IF NOT EXISTS customer_addresses (
+      id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+      customer_id UUID REFERENCES customers(id) ON DELETE CASCADE,
+      region_id UUID REFERENCES regions(id),
+      city_id UUID REFERENCES cities(id),
+      district_id UUID REFERENCES districts(id),
+      label VARCHAR(120),
+      address TEXT NOT NULL,
+      is_default BOOLEAN DEFAULT FALSE,
+      created_at TIMESTAMP DEFAULT NOW(),
+      updated_at TIMESTAMP DEFAULT NOW()
+    )
+  `);
+  await query(`CREATE INDEX IF NOT EXISTS idx_customer_addresses_customer ON customer_addresses(customer_id)`);
+
+  await query(`
+    CREATE TABLE IF NOT EXISTS customer_favorite_beauticians (
+      id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+      customer_id UUID REFERENCES customers(id) ON DELETE CASCADE,
+      beautician_id UUID REFERENCES artists(id) ON DELETE CASCADE,
+      created_at TIMESTAMP DEFAULT NOW(),
+      UNIQUE(customer_id, beautician_id)
+    )
+  `);
+  await query(`CREATE INDEX IF NOT EXISTS idx_customer_favorites_customer ON customer_favorite_beauticians(customer_id)`);
+}
+
+function parseJsonArray(value, fallback = []) {
+  if (Array.isArray(value)) return value;
+  if (value == null || value === '') return fallback;
+  try { const parsed = typeof value === 'string' ? JSON.parse(value) : value; return Array.isArray(parsed) ? parsed : fallback; }
+  catch { return String(value).split(',').map(x => x.trim()).filter(Boolean); }
+}
+
+function dayOfWeekForDate(dateValue) {
+  if (!dateValue) return null;
+  const d = new Date(`${String(dateValue).slice(0,10)}T12:00:00`);
+  return Number.isNaN(d.getTime()) ? null : d.getDay();
+}
+
+function timeToMinutes(value) {
+  if (!value) return null;
+  const [h, m] = String(value).slice(0,5).split(':').map(Number);
+  return Number.isFinite(h) ? h * 60 + (Number.isFinite(m) ? m : 0) : null;
+}
+
+async function getSuitableBeauticiansForBooking(bookingId) {
+  const bookingResult = await bookingsQuery(`WHERE b.id=$1`, [bookingId]);
+  const booking = bookingResult.rows[0];
+  if (!booking) return { booking: null, suggestions: [] };
+  const params = [];
+  const where = [`a.status='active'`, `COALESCE(a.availability_status,'available')='available'`];
+  if (booking.service_id) {
+    params.push(booking.service_id);
+    where.push(`(a.main_expertise_service_id=$${params.length} OR EXISTS (SELECT 1 FROM beautician_services bs WHERE bs.beautician_id=a.id AND bs.service_id=$${params.length}))`);
+  }
+  const result = await query(`
+    SELECT a.*, r.name_ar AS region_name, c.name_ar AS city_name, COALESCE(ms.name_ar, ms.name) AS main_expertise_name,
+      COALESCE(ROUND(AVG(br.rating)::numeric,1), ROUND(AVG(ar.overall_rating)::numeric,1), a.rating, 5) AS review_rating,
+      COUNT(DISTINCT b2.id)::int AS active_bookings,
+      COUNT(DISTINCT p.id)::int AS portfolio_count
+    FROM artists a
+    LEFT JOIN regions r ON r.id=a.region_id
+    LEFT JOIN cities c ON c.id=a.city_id
+    LEFT JOIN services ms ON ms.id=a.main_expertise_service_id
+    LEFT JOIN beautician_reviews br ON br.beautician_id=a.id AND br.status='published'
+    LEFT JOIN artist_reviews ar ON ar.artist_id=a.id
+    LEFT JOIN beautician_portfolio p ON p.beautician_id=a.id AND p.status='published'
+    LEFT JOIN bookings b2 ON b2.assigned_artist_id=a.id AND b2.booking_date=$${params.length + 1} AND b2.status NOT IN ('completed','cancelled')
+    WHERE ${where.join(' AND ')}
+    GROUP BY a.id, r.name_ar, c.name_ar, ms.name_ar, ms.name
+  `, [...params, booking.booking_date]);
+
+  const bookingDay = dayOfWeekForDate(booking.booking_date);
+  const requestedTime = timeToMinutes(booking.booking_time);
+  const suggestions = result.rows.map(a => {
+    const reasons = [];
+    const blocked = [];
+    const days = parseJsonArray(a.working_days, []);
+    const coverageCities = parseJsonArray(a.coverage_city_ids, []);
+    const coverageDistricts = parseJsonArray(a.coverage_district_ids, []);
+    const start = timeToMinutes(a.work_start_time);
+    const end = timeToMinutes(a.work_end_time);
+    if (bookingDay != null && days.length && !days.map(String).includes(String(bookingDay))) blocked.push('اليوم خارج أيام العمل'); else reasons.push('اليوم مناسب');
+    if (requestedTime != null && start != null && end != null && (requestedTime < start || requestedTime > end)) blocked.push('الوقت خارج ساعات العمل'); else reasons.push('الوقت مناسب');
+    if (coverageCities.length && booking.city_id && !coverageCities.map(String).includes(String(booking.city_id))) blocked.push('المدينة خارج التغطية'); else reasons.push('المدينة ضمن التغطية');
+    if (coverageDistricts.length && booking.district_id && !coverageDistricts.map(String).includes(String(booking.district_id))) blocked.push('الحي خارج التغطية'); else reasons.push('الحي ضمن التغطية');
+    if (Number(a.active_bookings || 0) >= Number(a.max_daily_bookings || 3)) blocked.push('وصلت للحد اليومي');
+    const score = (Number(a.review_rating || 5) * 20) + (Number(a.portfolio_count || 0) * 2) - (Number(a.active_bookings || 0) * 8) - (blocked.length * 100);
+    return { ...a, is_suitable: blocked.length === 0, suitability_score: score, suitability_reasons: reasons, suitability_warnings: blocked };
+  }).sort((a,b) => b.suitability_score - a.suitability_score);
+  return { booking, suggestions };
+}
+
+function signCustomerToken(customer) {
+  return jwt.sign({ id: customer.id, phone: customer.phone, name: customer.name, scope: 'customer' }, JWT_SECRET, { expiresIn: '30d' });
+}
+
+function authenticateCustomer(req, res, next) {
+  const header = req.headers.authorization || '';
+  const token = header.startsWith('Bearer ') ? header.slice(7) : null;
+  if (!token) return res.status(401).json({ error: 'Customer login required' });
+  try {
+    const payload = jwt.verify(token, JWT_SECRET);
+    if (payload.scope !== 'customer') return res.status(401).json({ error: 'Invalid customer token' });
+    req.customer = payload;
+    return next();
+  } catch (_) { return res.status(401).json({ error: 'Invalid or expired customer session' }); }
+}
+
 async function initSchemas() {
   await ensureV14Schema();
   await ensureV16Schema();
   await ensureV17V18Schema();
   await ensureV20Schema();
   await ensureV21PaymentSchema();
+  await ensureV22V23Schema();
 }
 
 initSchemas().catch(error => console.error('schema init failed:', error));
@@ -561,7 +699,7 @@ app.post('/api/admin/login', async (req, res) => {
 });
 
 app.get(['/api/health', '/health'], (req, res) => {
-  res.json({ ok: true, app: 'Beauty Home Service API', version: 'v2.0' });
+  res.json({ ok: true, app: 'Beauty Home Service API', version: 'v2.3' });
 });
 
 app.get('/api/regions', async (req, res) => {
@@ -695,7 +833,9 @@ async function bookingsQuery(where = '', params = []) {
       r.name_ar AS region_name, city.name_ar AS city_name, d.name_ar AS district_name,
       sc.name_ar AS service_category_name, COALESCE(s.name_ar, s.name) AS service_name,
       a.name AS artist_name, a.phone AS artist_phone, pa.name AS preferred_artist_name, pa.phone AS preferred_artist_phone,
-      CASE COALESCE(b.booking_source,'unknown') WHEN 'mobile' THEN 'الجوال' WHEN 'web' THEN 'الويب' WHEN 'admin' THEN 'الإدارة' ELSE COALESCE(b.booking_source,'غير محدد') END AS booking_source_label
+      CASE COALESCE(b.booking_source,'unknown') WHEN 'mobile' THEN 'الجوال' WHEN 'web' THEN 'الويب' WHEN 'admin' THEN 'الإدارة' WHEN 'legacy' THEN 'قديم' ELSE 'غير محدد' END AS booking_source_label,
+      CASE COALESCE(b.status,'new') WHEN 'new' THEN 'طلب جديد' WHEN 'under_review' THEN 'قيد المراجعة' WHEN 'waiting_customer_confirmation' THEN 'بانتظار تأكيد العميلة' WHEN 'confirmed' THEN 'تم تأكيد الحجز' WHEN 'beautician_assigned' THEN 'تم تعيين خبيرة التجميل' WHEN 'artist_assigned' THEN 'تم تعيين خبيرة التجميل' WHEN 'in_progress' THEN 'قيد التنفيذ' WHEN 'completed' THEN 'مكتمل' WHEN 'cancelled' THEN 'ملغي' ELSE COALESCE(b.status,'-') END AS status_label,
+      CASE COALESCE(b.payment_status,'unpaid') WHEN 'unpaid' THEN 'غير مدفوع' WHEN 'deposit_paid' THEN 'عربون مدفوع' WHEN 'paid' THEN 'مدفوع بالكامل' WHEN 'refunded' THEN 'مسترجع' ELSE COALESCE(b.payment_status,'غير مدفوع') END AS payment_status_label
     FROM bookings b
     LEFT JOIN customers c ON c.id=b.customer_id
     LEFT JOIN regions r ON r.id=b.region_id
@@ -841,11 +981,14 @@ app.delete('/api/admin/bookings/:id', async (req, res) => {
 app.patch('/api/admin/bookings/:id/assign-artist', async (req, res) => {
   try {
     const { artist_id, force } = req.body;
-    const current = await query(`SELECT id, status, booking_date FROM bookings WHERE id=$1`, [req.params.id]);
+    const current = await query(`SELECT id, status, booking_date, booking_time, city_id, district_id, service_id FROM bookings WHERE id=$1`, [req.params.id]);
     if (!current.rows[0]) return res.status(404).json({ error: 'Booking not found' });
     if (artist_id && !force) {
-      const conflicts = await query(`SELECT id, booking_date, booking_time, status FROM bookings WHERE assigned_artist_id=$1 AND id<>$2 AND booking_date=$3 AND status NOT IN ('completed','cancelled','unavailable')`, [artist_id, req.params.id, current.rows[0].booking_date]);
-      if (conflicts.rows.length) return res.status(409).json({ error: 'يوجد تعارض في جدول خبيرة التجميل لنفس اليوم.', conflict_count: conflicts.rows.length, conflicts: conflicts.rows });
+      const smart = await getSuitableBeauticiansForBooking(req.params.id);
+      const candidate = smart.suggestions.find(x => x.id === artist_id);
+      if (!candidate || !candidate.is_suitable) {
+        return res.status(409).json({ error: 'خبيرة التجميل غير مناسبة حسب التوفر أو التغطية.', warnings: candidate?.suitability_warnings || ['ليست ضمن قائمة المرشحات'] });
+      }
     }
     const newStatus = artist_id ? 'beautician_assigned' : (normalizeBookingStatus(current.rows[0].status) || 'under_review');
     const result = await query(`UPDATE bookings SET assigned_artist_id=$1::uuid, status=$2::varchar, last_status_change_at=NOW(), updated_at=NOW() WHERE id=$3::uuid RETURNING *`, [artist_id || null, newStatus, req.params.id]);
@@ -853,6 +996,45 @@ app.patch('/api/admin/bookings/:id/assign-artist', async (req, res) => {
     await logBookingEvent(req.params.id, 'beautician_assigned', artist_id ? 'تم تعيين خبيرة التجميل' : 'تم إلغاء تعيين الخبيرة', artist_id || '', 'admin', req.admin?.email || null);
     res.json(result.rows[0]);
   } catch (error) { res.status(500).json({ error: 'Failed to assign beautician', details: error.message }); }
+});
+
+app.get('/api/admin/bookings/:id/smart-beauticians', async (req, res) => {
+  try {
+    const result = await getSuitableBeauticiansForBooking(req.params.id);
+    if (!result.booking) return res.status(404).json({ error: 'Booking not found' });
+    res.json(result);
+  } catch (error) { res.status(500).json({ error: 'Failed to load smart beautician suggestions', details: error.message }); }
+});
+
+app.get('/api/admin/beauticians/:id/availability', async (req, res) => {
+  try {
+    const result = await query(`SELECT id, name, availability_status, working_days, work_start_time, work_end_time, max_daily_bookings, coverage_city_ids, coverage_district_ids FROM artists WHERE id=$1`, [req.params.id]);
+    if (!result.rows[0]) return res.status(404).json({ error: 'Beautician not found' });
+    res.json(result.rows[0]);
+  } catch (error) { res.status(500).json({ error: 'Failed to load availability', details: error.message }); }
+});
+
+app.patch('/api/admin/beauticians/:id/availability', async (req, res) => {
+  try {
+    const b = req.body || {};
+    const workingDays = JSON.stringify(parseJsonArray(b.working_days, [0,1,2,3,4,5]).map(Number).filter(n => Number.isInteger(n) && n >= 0 && n <= 6));
+    const coverageCities = JSON.stringify(parseJsonArray(b.coverage_city_ids, []).filter(Boolean));
+    const coverageDistricts = JSON.stringify(parseJsonArray(b.coverage_district_ids, []).filter(Boolean));
+    const result = await query(`
+      UPDATE artists SET
+        availability_status=$1::varchar,
+        working_days=$2::jsonb,
+        work_start_time=$3::time,
+        work_end_time=$4::time,
+        max_daily_bookings=$5::int,
+        coverage_city_ids=$6::jsonb,
+        coverage_district_ids=$7::jsonb,
+        updated_at=NOW()
+      WHERE id=$8::uuid RETURNING *
+    `, [b.availability_status || 'available', workingDays, b.work_start_time || '10:00', b.work_end_time || '22:00', Number(b.max_daily_bookings || 3), coverageCities, coverageDistricts, req.params.id]);
+    if (!result.rows[0]) return res.status(404).json({ error: 'Beautician not found' });
+    res.json(result.rows[0]);
+  } catch (error) { res.status(500).json({ error: 'Failed to update availability', details: error.message }); }
 });
 
 function activeOrAll(req) { return req.query.all === '1' ? '' : `WHERE status='active'`; }
@@ -1251,12 +1433,25 @@ app.delete(['/api/admin/artists/:id','/api/admin/beauticians/:id'], async (req, 
 app.get('/api/beauticians', async (req, res) => {
   try {
     const params = [];
-    const where = [`a.status='active'`];
-    if (req.query.region_id) { params.push(req.query.region_id); where.push(`(a.region_id=$${params.length} OR a.region_id IS NULL)`); }
-    if (req.query.city_id) { params.push(req.query.city_id); where.push(`(a.city_id=$${params.length} OR a.city_id IS NULL)`); }
-    if (req.query.service_id) { params.push(req.query.service_id); where.push(`(a.main_expertise_service_id=$${params.length} OR EXISTS (SELECT 1 FROM beautician_services bs WHERE bs.beautician_id=a.id AND bs.service_id=$${params.length}))`); }
+    const where = [`COALESCE(a.status,'active') IN ('active','available')`, `COALESCE(a.availability_status,'available')='available'`];
+    if (req.query.region_id) {
+      params.push(req.query.region_id);
+      where.push(`(a.region_id=$${params.length}::uuid OR a.region_id IS NULL)`);
+    }
+    if (req.query.city_id) {
+      params.push(req.query.city_id);
+      where.push(`(a.city_id=$${params.length}::uuid OR a.city_id IS NULL OR COALESCE(a.coverage_city_ids,'[]'::jsonb) ? $${params.length}::text OR COALESCE(a.coverage_city_ids,'[]'::jsonb)='[]'::jsonb)`);
+    }
+    if (req.query.district_id) {
+      params.push(req.query.district_id);
+      where.push(`(COALESCE(a.coverage_district_ids,'[]'::jsonb) ? $${params.length}::text OR COALESCE(a.coverage_district_ids,'[]'::jsonb)='[]'::jsonb)`);
+    }
+    if (req.query.service_id) {
+      params.push(req.query.service_id);
+      where.push(`(a.main_expertise_service_id=$${params.length}::uuid OR EXISTS (SELECT 1 FROM beautician_services bs WHERE bs.beautician_id=a.id AND bs.service_id=$${params.length}::uuid))`);
+    }
     const result = await query(`
-      SELECT a.id, a.name, a.phone, a.bio, a.skills, a.rating, a.status, a.region_id, a.city_id, a.main_expertise_service_id,
+      SELECT a.id, a.name, a.phone, a.bio, a.skills, a.rating, a.status, a.availability_status, a.region_id, a.city_id, a.main_expertise_service_id,
         r.name_ar AS region_name, c.name_ar AS city_name, COALESCE(ms.name_ar, ms.name) AS main_expertise_name,
         COALESCE(ROUND(AVG(br.rating)::numeric,1), ROUND(AVG(ar.overall_rating)::numeric,1), a.rating) AS review_rating,
         (COUNT(DISTINCT br.id) + COUNT(DISTINCT ar.id))::int AS review_count,
@@ -1518,17 +1713,97 @@ app.get('/api/customer/bookings/:id', async (req, res) => {
   } catch (error) { res.status(500).json({ error: 'Failed to load customer booking', details: error.message }); }
 });
 
-app.post('/api/auth/request-otp', async (req, res) => {
-  const phone = normalizePhone(req.body.phone);
-  if (!phone) return res.status(400).json({ error: 'phone is required' });
-  res.json({ ok: true, message: 'OTP generated for local testing', otp: '1234' });
+
+async function requestCustomerOtp(req, res) {
+  try {
+    const phone = normalizePhone(req.body.phone);
+    const name = nullable(req.body.name);
+    if (!phone) return res.status(400).json({ error: 'phone is required' });
+    let customer = await query(`SELECT * FROM customers WHERE phone=$1 LIMIT 1`, [phone]);
+    if (!customer.rows[0]) {
+      customer = await query(`INSERT INTO customers (name, phone, status) VALUES ($1,$2,'active') RETURNING *`, [name || 'عميلة', phone]);
+    } else if (name) {
+      customer = await query(`UPDATE customers SET name=COALESCE($1,name), updated_at=NOW() WHERE id=$2 RETURNING *`, [name, customer.rows[0].id]);
+    }
+    const otp = process.env.NODE_ENV === 'production' ? String(Math.floor(100000 + Math.random() * 900000)) : '1234';
+    await query(`UPDATE customer_otp_codes SET used_at=NOW() WHERE phone=$1 AND used_at IS NULL`, [phone]);
+    await query(`INSERT INTO customer_otp_codes (customer_id, phone, otp_code, purpose, expires_at) VALUES ($1,$2,$3,'login',NOW() + INTERVAL '10 minutes')`, [customer.rows[0].id, phone, otp]);
+    res.json({ ok: true, message: 'تم إنشاء رمز التحقق.', dev_otp: otp });
+  } catch (error) { res.status(500).json({ error: 'Failed to request OTP', details: error.message }); }
+}
+
+async function verifyCustomerOtp(req, res) {
+  try {
+    const phone = normalizePhone(req.body.phone);
+    const code = String(req.body.otp || req.body.code || '').trim();
+    if (!phone || !code) return res.status(400).json({ error: 'phone and otp are required' });
+    const otp = await query(`SELECT * FROM customer_otp_codes WHERE phone=$1 AND otp_code=$2 AND used_at IS NULL AND expires_at > NOW() ORDER BY created_at DESC LIMIT 1`, [phone, code]);
+    if (!otp.rows[0]) return res.status(400).json({ error: 'Invalid or expired OTP' });
+    await query(`UPDATE customer_otp_codes SET used_at=NOW() WHERE id=$1`, [otp.rows[0].id]);
+    const customer = await query(`SELECT * FROM customers WHERE id=$1 LIMIT 1`, [otp.rows[0].customer_id]);
+    if (!customer.rows[0]) return res.status(404).json({ error: 'Customer not found' });
+    const token = signCustomerToken(customer.rows[0]);
+    res.json({ ok: true, token, customer: { id: customer.rows[0].id, name: customer.rows[0].name, phone: customer.rows[0].phone } });
+  } catch (error) { res.status(500).json({ error: 'Failed to verify OTP', details: error.message }); }
+}
+
+app.post('/api/customer/auth/request-otp', requestCustomerOtp);
+app.post('/api/customer/auth/verify-otp', verifyCustomerOtp);
+app.post('/api/auth/request-otp', requestCustomerOtp);
+app.post('/api/auth/verify-otp', verifyCustomerOtp);
+
+app.get('/api/customer/me', authenticateCustomer, async (req, res) => {
+  try {
+    const c = await query(`SELECT id, name, phone, region_id, city_id, district_id, status FROM customers WHERE id=$1`, [req.customer.id]);
+    if (!c.rows[0]) return res.status(404).json({ error: 'Customer not found' });
+    res.json(c.rows[0]);
+  } catch (error) { res.status(500).json({ error: 'Failed to load customer profile', details: error.message }); }
 });
 
-app.post('/api/auth/verify-otp', async (req, res) => {
-  const phone = normalizePhone(req.body.phone);
-  const otp = String(req.body.otp || '');
-  if (!phone || otp !== '1234') return res.status(400).json({ error: 'Invalid OTP' });
-  res.json({ ok: true, token: `local-customer-${phone}`, phone });
+app.get('/api/customer/my-bookings', authenticateCustomer, async (req, res) => {
+  try { const result = await bookingsQuery(`WHERE b.customer_id=$1`, [req.customer.id]); res.json(result.rows); }
+  catch (error) { res.status(500).json({ error: 'Failed to load customer bookings', details: error.message }); }
+});
+
+app.get('/api/customer/addresses', authenticateCustomer, async (req, res) => {
+  try {
+    const result = await query(`SELECT ca.*, r.name_ar AS region_name, c.name_ar AS city_name, d.name_ar AS district_name FROM customer_addresses ca LEFT JOIN regions r ON r.id=ca.region_id LEFT JOIN cities c ON c.id=ca.city_id LEFT JOIN districts d ON d.id=ca.district_id WHERE ca.customer_id=$1 ORDER BY ca.is_default DESC, ca.created_at DESC`, [req.customer.id]);
+    res.json(result.rows);
+  } catch (error) { res.status(500).json({ error: 'Failed to load addresses', details: error.message }); }
+});
+
+app.post('/api/customer/addresses', authenticateCustomer, async (req, res) => {
+  try {
+    const a = req.body || {};
+    if (!a.address) return res.status(400).json({ error: 'address is required' });
+    if (a.is_default) await query(`UPDATE customer_addresses SET is_default=FALSE WHERE customer_id=$1`, [req.customer.id]);
+    const result = await query(`INSERT INTO customer_addresses (customer_id, region_id, city_id, district_id, label, address, is_default) VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *`, [req.customer.id, a.region_id || null, a.city_id || null, a.district_id || null, nullable(a.label) || 'عنوان', nullable(a.address), !!a.is_default]);
+    res.status(201).json(result.rows[0]);
+  } catch (error) { res.status(500).json({ error: 'Failed to save address', details: error.message }); }
+});
+
+app.delete('/api/customer/addresses/:id', authenticateCustomer, async (req, res) => {
+  try { await query(`DELETE FROM customer_addresses WHERE id=$1 AND customer_id=$2`, [req.params.id, req.customer.id]); res.json({ ok: true }); }
+  catch (error) { res.status(500).json({ error: 'Failed to delete address', details: error.message }); }
+});
+
+app.get('/api/customer/favorites', authenticateCustomer, async (req, res) => {
+  try {
+    const result = await query(`SELECT f.*, a.name AS beautician_name, a.phone AS beautician_phone, COALESCE(s.name_ar, s.name) AS main_expertise_name FROM customer_favorite_beauticians f LEFT JOIN artists a ON a.id=f.beautician_id LEFT JOIN services s ON s.id=a.main_expertise_service_id WHERE f.customer_id=$1 ORDER BY f.created_at DESC`, [req.customer.id]);
+    res.json(result.rows);
+  } catch (error) { res.status(500).json({ error: 'Failed to load favorites', details: error.message }); }
+});
+
+app.post('/api/customer/favorites/:beauticianId', authenticateCustomer, async (req, res) => {
+  try {
+    const result = await query(`INSERT INTO customer_favorite_beauticians (customer_id, beautician_id) VALUES ($1,$2) ON CONFLICT (customer_id, beautician_id) DO NOTHING RETURNING *`, [req.customer.id, req.params.beauticianId]);
+    res.status(201).json(result.rows[0] || { ok: true });
+  } catch (error) { res.status(500).json({ error: 'Failed to save favorite', details: error.message }); }
+});
+
+app.delete('/api/customer/favorites/:beauticianId', authenticateCustomer, async (req, res) => {
+  try { await query(`DELETE FROM customer_favorite_beauticians WHERE customer_id=$1 AND beautician_id=$2`, [req.customer.id, req.params.beauticianId]); res.json({ ok: true }); }
+  catch (error) { res.status(500).json({ error: 'Failed to delete favorite', details: error.message }); }
 });
 
 app.post('/api/uploads/design-image', async (req, res) => {
