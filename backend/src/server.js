@@ -330,6 +330,79 @@ async function ensureV17V18Schema() {
   }
 }
 
+
+async function ensureV20Schema() {
+  await query(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS booking_number VARCHAR(40) UNIQUE`);
+  await query(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS booking_source VARCHAR(30) DEFAULT 'unknown'`);
+  await query(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS source_channel VARCHAR(30)`);
+  await query(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS last_status_change_at TIMESTAMP`);
+  await query(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS confirmed_at TIMESTAMP`);
+  await query(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS completed_at TIMESTAMP`);
+  await query(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS cancelled_at TIMESTAMP`);
+  await query(`CREATE SEQUENCE IF NOT EXISTS booking_number_seq START 1`);
+  await query(`CREATE INDEX IF NOT EXISTS idx_bookings_number ON bookings(booking_number)`);
+  await query(`CREATE INDEX IF NOT EXISTS idx_bookings_source ON bookings(booking_source)`);
+  await query(`
+    WITH ordered AS (
+      SELECT id, ROW_NUMBER() OVER (ORDER BY created_at, id) AS rn
+      FROM bookings
+      WHERE booking_number IS NULL
+    )
+    UPDATE bookings b
+    SET booking_number = 'BHS-' || EXTRACT(YEAR FROM COALESCE(b.created_at, NOW()))::int || '-' || LPAD(ordered.rn::text, 6, '0'),
+        booking_source = COALESCE(booking_source, 'legacy')
+    FROM ordered
+    WHERE b.id = ordered.id
+  `);
+}
+
+async function generateBookingNumber() {
+  const result = await query(`SELECT nextval('booking_number_seq') AS seq`);
+  const seq = String(result.rows[0].seq).padStart(6, '0');
+  const year = new Date().getFullYear();
+  return `BHS-${year}-${seq}`;
+}
+
+
+async function ensureV21PaymentSchema() {
+  await query(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS payment_method VARCHAR(40)`);
+  await query(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS payment_reference VARCHAR(120)`);
+  await query(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS payment_proof_url TEXT`);
+  await query(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS payment_notes TEXT`);
+  await query(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS paid_at TIMESTAMP`);
+  await query(`
+    CREATE TABLE IF NOT EXISTS payment_records (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      booking_id UUID REFERENCES bookings(id) ON DELETE CASCADE,
+      payment_status VARCHAR(40),
+      payment_method VARCHAR(40),
+      amount NUMERIC(12,2),
+      reference_no VARCHAR(120),
+      proof_url TEXT,
+      note TEXT,
+      created_by VARCHAR(120),
+      created_at TIMESTAMP DEFAULT NOW()
+    )
+  `);
+  await query(`CREATE INDEX IF NOT EXISTS idx_payment_records_booking ON payment_records(booking_id)`);
+}
+
+function normalizeBookingStatus(status) {
+  if (status === 'artist_assigned') return 'beautician_assigned';
+  return status || 'new';
+}
+
+const BOOKING_STATUS_LABELS = {
+  new: 'جديد',
+  under_review: 'قيد المراجعة',
+  waiting_customer_confirmation: 'بانتظار تأكيد العميلة',
+  confirmed: 'تم التأكيد',
+  beautician_assigned: 'تم تعيين خبيرة',
+  in_progress: 'قيد التنفيذ',
+  completed: 'مكتمل',
+  cancelled: 'ملغي'
+};
+
 async function logBookingEvent(bookingId, eventType, title, description, actorType = 'system', actorName = null, metadata = null) {
   if (!bookingId) return null;
   try {
@@ -379,6 +452,8 @@ async function initSchemas() {
   await ensureV14Schema();
   await ensureV16Schema();
   await ensureV17V18Schema();
+  await ensureV20Schema();
+  await ensureV21PaymentSchema();
 }
 
 initSchemas().catch(error => console.error('schema init failed:', error));
@@ -473,7 +548,7 @@ app.post('/api/admin/login', async (req, res) => {
 });
 
 app.get(['/api/health', '/health'], (req, res) => {
-  res.json({ ok: true, app: 'Beauty Home Service API', version: 'v1.8' });
+  res.json({ ok: true, app: 'Beauty Home Service API', version: 'v2.0' });
 });
 
 app.get('/api/regions', async (req, res) => {
@@ -546,6 +621,8 @@ app.post('/api/bookings', async (req, res) => {
     const serviceData = serviceId ? await query(`SELECT category_id FROM services WHERE id=$1`, [serviceId]) : { rows: [] };
     const serviceCategoryId = b.service_category_id || serviceData.rows[0]?.category_id || null;
     const preferredArtistId = b.preferred_artist_id || b.beautician_id || null;
+    const bookingNumber = await generateBookingNumber();
+    const bookingSource = nullable(b.booking_source || b.source || req.headers['x-booking-source']) || 'web';
     const customerId = await findOrCreateCustomer({ ...b, region_id: regionId, city_id: cityId, district_id: districtId });
 
     if (!customerId) return res.status(400).json({ error: 'Customer is required. Send customer_id or phone.' });
@@ -559,19 +636,19 @@ app.post('/api/bookings', async (req, res) => {
       INSERT INTO bookings (
         customer_id, region_id, city_id, district_id, service_category_id, event_type, service_id,
         booking_date, booking_time, people_count, address, latitude, longitude, design_image_url,
-        customer_notes, preferred_artist_id, contact_preference, alternate_time, status, payment_status
+        customer_notes, preferred_artist_id, contact_preference, alternate_time, booking_number, booking_source, status, payment_status, last_status_change_at
       )
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,'new','unpaid')
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,'new','unpaid',NOW())
       RETURNING *
     `, [
       customerId, regionId, cityId, districtId, serviceCategoryId, nullable(b.event_type), serviceId,
       b.booking_date, b.booking_time, b.people_count || 1, nullable(b.address), b.latitude || null, b.longitude || null,
       b.design_image_url || null, nullable(b.customer_notes), preferredArtistId,
-      nullable(b.contact_preference) || 'whatsapp', nullable(b.alternate_time)
+      nullable(b.contact_preference) || 'whatsapp', nullable(b.alternate_time), bookingNumber, bookingSource
     ]);
 
     await query(`INSERT INTO booking_status_history (booking_id, new_status, changed_by, note) VALUES ($1,'new','customer','تم إنشاء الطلب')`, [result.rows[0].id]);
-    await logBookingEvent(result.rows[0].id, 'created', 'تم إنشاء الطلب', 'تم إنشاء الطلب من تطبيق العميلة', 'customer');
+    await logBookingEvent(result.rows[0].id, 'created', 'تم إنشاء الطلب', `تم إنشاء الطلب من ${bookingSource}`, bookingSource === 'admin' ? 'admin' : 'customer', null, { booking_number: bookingNumber, source: bookingSource });
     res.status(201).json(result.rows[0]);
   } catch (error) {
     console.error('Create booking error:', error);
@@ -604,7 +681,8 @@ async function bookingsQuery(where = '', params = []) {
     SELECT b.*, c.name AS customer_name, c.phone AS customer_phone,
       r.name_ar AS region_name, city.name_ar AS city_name, d.name_ar AS district_name,
       sc.name_ar AS service_category_name, COALESCE(s.name_ar, s.name) AS service_name,
-      a.name AS artist_name, a.phone AS artist_phone, pa.name AS preferred_artist_name, pa.phone AS preferred_artist_phone
+      a.name AS artist_name, a.phone AS artist_phone, pa.name AS preferred_artist_name, pa.phone AS preferred_artist_phone,
+      CASE COALESCE(b.booking_source,'unknown') WHEN 'mobile' THEN 'الجوال' WHEN 'web' THEN 'الويب' WHEN 'admin' THEN 'الإدارة' ELSE COALESCE(b.booking_source,'غير محدد') END AS booking_source_label
     FROM bookings b
     LEFT JOIN customers c ON c.id=b.customer_id
     LEFT JOIN regions r ON r.id=b.region_id
@@ -629,7 +707,8 @@ app.get('/api/admin/bookings/:id', async (req, res) => {
     const booking = await bookingsQuery(`WHERE b.id=$1`, [req.params.id]);
     if (!booking.rows[0]) return res.status(404).json({ error: 'Booking not found' });
     const history = await query(`SELECT * FROM booking_status_history WHERE booking_id=$1 ORDER BY created_at DESC`, [req.params.id]);
-    res.json({ booking: booking.rows[0], history: history.rows });
+    const events = await query(`SELECT * FROM booking_events WHERE booking_id=$1 ORDER BY created_at DESC`, [req.params.id]);
+    res.json({ booking: booking.rows[0], history: history.rows, events: events.rows });
   } catch (error) {
     res.status(500).json({ error: 'Failed to load booking details', details: error.message });
   }
@@ -637,11 +716,12 @@ app.get('/api/admin/bookings/:id', async (req, res) => {
 
 app.patch('/api/admin/bookings/:id/status', async (req, res) => {
   try {
+    const requestedStatus = normalizeBookingStatus(req.body.status);
     const current = await query(`SELECT status FROM bookings WHERE id=$1`, [req.params.id]);
     if (!current.rows[0]) return res.status(404).json({ error: 'Booking not found' });
-    const result = await query(`UPDATE bookings SET status=$1, admin_notes=COALESCE($2,admin_notes), updated_at=NOW() WHERE id=$3 RETURNING *`, [req.body.status, req.body.admin_notes || null, req.params.id]);
-    await query(`INSERT INTO booking_status_history (booking_id, old_status, new_status, changed_by, note) VALUES ($1,$2,$3,'admin',$4)`, [req.params.id, current.rows[0].status, req.body.status, nullable(req.body.note)]);
-    await logBookingEvent(req.params.id, 'status_changed', 'تم تغيير حالة الطلب', `${current.rows[0].status} → ${req.body.status}`, 'admin', req.admin?.email || null);
+    const result = await query(`UPDATE bookings SET status=$1, admin_notes=COALESCE($2,admin_notes), last_status_change_at=NOW(), confirmed_at=CASE WHEN $1='confirmed' THEN NOW() ELSE confirmed_at END, completed_at=CASE WHEN $1='completed' THEN NOW() ELSE completed_at END, cancelled_at=CASE WHEN $1='cancelled' THEN NOW() ELSE cancelled_at END, updated_at=NOW() WHERE id=$3 RETURNING *`, [requestedStatus, req.body.admin_notes || null, req.params.id]);
+    await query(`INSERT INTO booking_status_history (booking_id, old_status, new_status, changed_by, note) VALUES ($1,$2,$3,'admin',$4)`, [req.params.id, current.rows[0].status, requestedStatus, nullable(req.body.note)]);
+    await logBookingEvent(req.params.id, 'status_changed', 'تم تغيير حالة الطلب', `${BOOKING_STATUS_LABELS[current.rows[0].status] || current.rows[0].status} → ${BOOKING_STATUS_LABELS[requestedStatus] || requestedStatus}`, 'admin', req.admin?.email || null);
     res.json(result.rows[0]);
   } catch (error) { res.status(500).json({ error: 'Failed to update booking status', details: error.message }); }
 });
@@ -655,6 +735,7 @@ app.patch('/api/admin/bookings/:id/details', async (req, res) => {
     `, [b.estimated_price || null, b.final_price || null, b.deposit_amount || null, b.payment_status || 'unpaid', nullable(b.admin_notes), req.params.id]);
     if (!result.rows[0]) return res.status(404).json({ error: 'Booking not found' });
     await query(`INSERT INTO booking_status_history (booking_id, old_status, new_status, changed_by, note) VALUES ($1,$2,$2,'admin','تم تحديث تفاصيل الطلب')`, [req.params.id, result.rows[0].status]);
+    await logBookingEvent(req.params.id, 'details_updated', 'تم تحديث تفاصيل الطلب', 'تم تحديث السعر أو الملاحظات أو حالة الدفع من تفاصيل الطلب', 'admin', req.admin?.email || null);
     res.json(result.rows[0]);
   } catch (error) { res.status(500).json({ error: 'Failed to update booking details', details: error.message }); }
 });
@@ -664,12 +745,49 @@ app.patch('/api/admin/bookings/:id/payment', async (req, res) => {
     const allowed = ['unpaid', 'deposit_paid', 'paid', 'refunded'];
     const paymentStatus = req.body.payment_status || 'unpaid';
     if (!allowed.includes(paymentStatus)) return res.status(400).json({ error: 'Invalid payment status' });
-    const result = await query(`UPDATE bookings SET payment_status=$1, updated_at=NOW() WHERE id=$2 RETURNING *`, [paymentStatus, req.params.id]);
+    const result = await query(`UPDATE bookings SET payment_status=$1, paid_at=CASE WHEN $1='paid' THEN COALESCE(paid_at,NOW()) ELSE paid_at END, updated_at=NOW() WHERE id=$2 RETURNING *`, [paymentStatus, req.params.id]);
     if (!result.rows[0]) return res.status(404).json({ error: 'Booking not found' });
     await query(`INSERT INTO booking_status_history (booking_id, old_status, new_status, changed_by, note) VALUES ($1,$2,$2,'admin',$3)`, [req.params.id, result.rows[0].status, `تم تحديث حالة الدفع إلى ${paymentStatus}`]);
     await logBookingEvent(req.params.id, 'payment_updated', 'تم تحديث حالة الدفع', `حالة الدفع: ${paymentStatus}`, 'admin', req.admin?.email || null);
     res.json(result.rows[0]);
   } catch (error) { res.status(500).json({ error: 'Failed to update payment status', details: error.message }); }
+});
+
+
+app.patch('/api/admin/bookings/:id/payment-details', async (req, res) => {
+  try {
+    const allowed = ['unpaid', 'deposit_paid', 'paid', 'refunded'];
+    const b = req.body || {};
+    const current = await query(`SELECT * FROM bookings WHERE id=$1`, [req.params.id]);
+    if (!current.rows[0]) return res.status(404).json({ error: 'Booking not found' });
+    const paymentStatus = b.payment_status || current.rows[0].payment_status || 'unpaid';
+    if (!allowed.includes(paymentStatus)) return res.status(400).json({ error: 'Invalid payment status' });
+    const result = await query(`
+      UPDATE bookings SET
+        payment_status=$1, payment_method=$2, payment_reference=$3, payment_proof_url=$4, payment_notes=$5,
+        deposit_amount=COALESCE($6, deposit_amount), final_price=COALESCE($7, final_price),
+        paid_at=CASE WHEN $1='paid' THEN COALESCE(paid_at,NOW()) ELSE paid_at END,
+        updated_at=NOW()
+      WHERE id=$8 RETURNING *
+    `, [paymentStatus, nullable(b.payment_method), nullable(b.payment_reference), nullable(b.payment_proof_url), nullable(b.payment_notes), b.deposit_amount || null, b.final_price || null, req.params.id]);
+    await query(`INSERT INTO payment_records (booking_id, payment_status, payment_method, amount, reference_no, proof_url, note, created_by) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`, [req.params.id, paymentStatus, nullable(b.payment_method), b.amount || b.deposit_amount || null, nullable(b.payment_reference), nullable(b.payment_proof_url), nullable(b.payment_notes), req.admin?.email || 'admin']);
+    await logBookingEvent(req.params.id, 'payment_details_updated', 'تم تحديث تفاصيل الدفع', `حالة الدفع: ${paymentStatus}${b.payment_method ? ' / طريقة الدفع: '+b.payment_method : ''}`, 'admin', req.admin?.email || null);
+    res.json(result.rows[0]);
+  } catch (error) { res.status(500).json({ error: 'Failed to update payment details', details: error.message }); }
+});
+
+app.get('/api/admin/payments', async (req, res) => {
+  try {
+    const result = await query(`
+      SELECT pr.*, b.booking_number, c.name AS customer_name, c.phone AS customer_phone
+      FROM payment_records pr
+      LEFT JOIN bookings b ON b.id=pr.booking_id
+      LEFT JOIN customers c ON c.id=b.customer_id
+      ORDER BY pr.created_at DESC
+      LIMIT 200
+    `);
+    res.json(result.rows);
+  } catch (error) { res.status(500).json({ error: 'Failed to load payment records', details: error.message }); }
 });
 
 app.delete('/api/admin/bookings/:id', async (req, res) => {
@@ -690,9 +808,9 @@ app.patch('/api/admin/bookings/:id/assign-artist', async (req, res) => {
       const conflicts = await query(`SELECT id, booking_date, booking_time, status FROM bookings WHERE assigned_artist_id=$1 AND id<>$2 AND booking_date=$3 AND status NOT IN ('completed','cancelled','unavailable')`, [artist_id, req.params.id, current.rows[0].booking_date]);
       if (conflicts.rows.length) return res.status(409).json({ error: 'يوجد تعارض في جدول خبيرة التجميل لنفس اليوم.', conflict_count: conflicts.rows.length, conflicts: conflicts.rows });
     }
-    const status = artist_id ? 'artist_assigned' : current.rows[0].status;
-    const result = await query(`UPDATE bookings SET assigned_artist_id=$1, status=$2, updated_at=NOW() WHERE id=$3 RETURNING *`, [artist_id || null, status, req.params.id]);
-    await query(`INSERT INTO booking_status_history (booking_id, old_status, new_status, changed_by, note) VALUES ($1,$2,$3,'admin',$4)`, [req.params.id, current.rows[0].status, status, artist_id ? 'تم تعيين خبيرة التجميل' : 'تم إلغاء تعيين خبيرة التجميل']);
+    const newStatus = artist_id ? 'beautician_assigned' : normalizeBookingStatus(current.rows[0].status);
+    const result = await query(`UPDATE bookings SET assigned_artist_id=$1, status=$2, last_status_change_at=NOW(), updated_at=NOW() WHERE id=$3 RETURNING *`, [artist_id || null, newStatus, req.params.id]);
+    await query(`INSERT INTO booking_status_history (booking_id, old_status, new_status, changed_by, note) VALUES ($1,$2,$3,'admin',$4)`, [req.params.id, current.rows[0].status, newStatus, artist_id ? 'تم تعيين خبيرة التجميل' : 'تم إلغاء تعيين خبيرة التجميل']);
     await logBookingEvent(req.params.id, 'beautician_assigned', artist_id ? 'تم تعيين خبيرة التجميل' : 'تم إلغاء تعيين الخبيرة', artist_id || '', 'admin', req.admin?.email || null);
     res.json(result.rows[0]);
   } catch (error) { res.status(500).json({ error: 'Failed to assign beautician', details: error.message }); }
@@ -1252,6 +1370,18 @@ app.get('/api/admin/notifications', async (req, res) => {
       items: recent.rows.slice(0, 20)
     });
   } catch (error) { res.status(500).json({ error: 'Failed to load notifications', details: error.message }); }
+});
+
+
+
+app.get('/api/admin/bookings/:id/operations', async (req, res) => {
+  try {
+    const booking = await bookingsQuery(`WHERE b.id=$1`, [req.params.id]);
+    if (!booking.rows[0]) return res.status(404).json({ error: 'Booking not found' });
+    const events = await query(`SELECT * FROM booking_events WHERE booking_id=$1 ORDER BY created_at DESC`, [req.params.id]);
+    const history = await query(`SELECT * FROM booking_status_history WHERE booking_id=$1 ORDER BY created_at DESC`, [req.params.id]);
+    res.json({ booking: booking.rows[0], events: events.rows, history: history.rows, status_labels: BOOKING_STATUS_LABELS });
+  } catch (error) { res.status(500).json({ error: 'Failed to load booking operations', details: error.message }); }
 });
 
 app.get('/api/admin/bookings/:id/events', async (req, res) => {

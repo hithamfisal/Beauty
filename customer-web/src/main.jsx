@@ -123,9 +123,9 @@ function App() {
   async function submitBooking(e) {
     e.preventDefault(); setLoading(true); setMessage('');
     try {
-      const payload = { ...booking, customer_phone: booking.phone, phone: booking.phone, people_count: Number(booking.people_count || 1) };
+      const payload = { ...booking, customer_phone: booking.phone, phone: booking.phone, people_count: Number(booking.people_count || 1), booking_source: 'web' };
       const created = await api('/bookings', { method: 'POST', body: JSON.stringify(payload) });
-      setMessage(`تم إرسال الطلب بنجاح. رقم الطلب: ${created.id}`);
+      setMessage(`تم إرسال الطلب بنجاح. رقم الطلب: ${created.booking_number || created.id}`);
       setBooking(emptyBooking);
       setTab('track');
       setTrackingPhone(payload.phone);
@@ -227,7 +227,7 @@ function BeauticianDetails({ data, choose }) {
   return <main className="container"><section className="profile"><div><h2>{b.name}</h2><p>{b.bio || 'خبيرة تجميل منزلية'}</p><div className="badges"><span><Star size={16}/> {b.review_rating || b.rating || '-'}</span><span>{b.main_expertise_name || 'خدمات تجميل'}</span><span>{b.city_name || 'عدة مدن'}</span></div><button className="primary" onClick={() => choose(b.id)}>اختيار هذه الخبيرة للحجز</button></div></section><section className="panel"><h2>معرض الأعمال</h2><PortfolioGrid items={data.portfolio || []}/></section><section className="panel"><h2>تقييمات العميلات</h2>{(data.reviews || []).length ? data.reviews.map(r => <div className="review" key={r.id}><b>⭐ {r.rating}</b><p>{r.review_text}</p></div>) : <p className="empty">لا توجد تقييمات منشورة حالياً.</p>}</section></main>
 }
 function TrackPage({ phone, setPhone, results, submit }) {
-  return <main className="container"><section className="panel"><h2>متابعة الطلب</h2><form className="track" onSubmit={submit}><Input value={phone} onChange={setPhone} placeholder="رقم الجوال"/><button className="primary"><Search size={18}/> بحث</button></form><div className="bookingList">{results.map(b => <div className="bookingCard" key={b.id}><div><b>طلب #{b.id}</b><span>{b.status || '-'}</span></div><p>{b.service_name || '-'} • {fmtDate(b.booking_date)} • {shortTime(b.booking_time)}</p><p>{b.region_name || '-'} / {b.city_name || '-'} / {b.district_name || '-'}</p><div className="timeline"><span><CheckCircle2 size={16}/> جديد</span><span><Clock3 size={16}/> {b.status || 'قيد المراجعة'}</span><span><MessageCircle size={16}/> {b.payment_status || 'غير مدفوع'}</span></div></div>)}</div></section></main>
+  return <main className="container"><section className="panel"><h2>متابعة الطلب</h2><form className="track" onSubmit={submit}><Input value={phone} onChange={setPhone} placeholder="رقم الجوال"/><button className="primary"><Search size={18}/> بحث</button></form><div className="bookingList">{results.map(b => <div className="bookingCard" key={b.id}><div><b>{b.booking_number || `طلب #${b.id}`}</b><span>{b.status || '-'}</span></div><p>{b.service_name || '-'} • {fmtDate(b.booking_date)} • {shortTime(b.booking_time)} • {b.booking_source_label || b.booking_source || 'web'}</p><p>{b.region_name || '-'} / {b.city_name || '-'} / {b.district_name || '-'}</p><div className="timeline"><span><CheckCircle2 size={16}/> جديد</span><span><Clock3 size={16}/> {b.status || 'قيد المراجعة'}</span><span><MessageCircle size={16}/> {b.payment_status || 'غير مدفوع'}</span></div></div>)}</div></section></main>
 }
 
 createRoot(document.getElementById('root')).render(<App />);
