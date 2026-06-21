@@ -7,7 +7,7 @@ const API = import.meta.env.VITE_API_BASE_URL || 'http://localhost:4000/api';
 const statusLabels = {
   new: 'طلب جديد', under_review: 'جاري المراجعة', waiting_customer_confirmation: 'بانتظار تأكيد العميلة',
   confirmed: 'تم تأكيد الحجز', beautician_assigned: 'تم تعيين خبيرة التجميل', in_progress: 'قيد التنفيذ',
-  completed: 'مكتمل', cancelled: 'ملغي', unavailable: 'غير متوفر'
+  completed: 'مكتمل', cancelled: 'ملغي'
 };
 const statusOptions = Object.entries(statusLabels);
 const paymentLabels = { unpaid: 'غير مدفوع', deposit_paid: 'عربون مدفوع', paid: 'مدفوع بالكامل', refunded: 'مسترجع' };
@@ -32,7 +32,7 @@ function whatsapp(phone, text) { const p = String(phone||'').replace(/[^0-9+]/g,
 function Card({ title, value }) { return <div className="card"><div className="value">{value}</div><div className="label">{title}</div></div>; }
 function Field({ label, children }) { return <label className="field"><span>{label}</span>{children}</label>; }
 function TextInput({ value, onChange, placeholder, type='text', required=false }) { return <input type={type} value={value ?? ''} placeholder={placeholder} required={required} onChange={e=>onChange(e.target.value)} />; }
-function Select({ value, onChange, children, required=false }) { return <select value={value ?? ''} required={required} onChange={e=>onChange(e.target.value)}>{children}</select>; }
+function Select({ value, onChange, children, required=false, disabled=false }) { return <select value={value ?? ''} required={required} disabled={disabled} onChange={e=>onChange(e.target.value)}>{children}</select>; }
 function OptionList({ items, label='name_ar', empty='اختر' }) { return <><option value="">{empty}</option>{items.map(i => <option key={i.id} value={i.id}>{i[label] || i.display_name || i.name || i.name_ar}</option>)}</>; }
 
 function App() {
@@ -52,6 +52,7 @@ function App() {
   const [message, setMessage] = useState('');
   const [filters, setFilters] = useState({ q:'', status:'', payment:'', region_id:'', city_id:'', beautician_id:'' });
   const [selectedBooking, setSelectedBooking] = useState(null);
+  const [updating, setUpdating] = useState({});
   const [adminToken, setAdminToken] = useState(() => localStorage.getItem('beauty_admin_token') || '');
   const [adminUser, setAdminUser] = useState(() => { try { return JSON.parse(localStorage.getItem('beauty_admin_user') || 'null'); } catch { return null; } });
   const [loginForm, setLoginForm] = useState({ email: 'admin@beauty.local', password: '' });
@@ -114,21 +115,63 @@ function App() {
   async function saveBeautician(e) { e.preventDefault(); try { const payload = clean(beauticianForm); if (editing.type === 'beautician') await api(`/admin/beauticians/${editing.id}`, { method:'PATCH', body: JSON.stringify(payload) }); else await api('/admin/beauticians', { method:'POST', body: JSON.stringify(payload) }); setBeauticianForm(emptyBeautician); setEditing({}); setMessage('تم حفظ خبيرة التجميل.'); await load(); } catch(e) { setMessage(`تعذر حفظ خبيرة التجميل: ${e.message}`); } }
   async function savePortfolio(e) { e.preventDefault(); try { const payload = clean(portfolioForm); if (editing.type === 'portfolio') await api(`/admin/beautician-portfolio/${editing.id}`, { method:'PATCH', body: JSON.stringify(payload) }); else await api('/admin/beautician-portfolio', { method:'POST', body: JSON.stringify(payload) }); setPortfolioForm(emptyPortfolio); setEditing({}); setMessage('تم حفظ نموذج العمل.'); await load(); } catch(e) { setMessage(`تعذر حفظ نموذج العمل: ${e.message}`); } }
   async function deleteItem(path, id, label='العنصر') { if (!confirm(`تأكيد حذف ${label}؟`)) return; try { await api(`${path}/${id}`, { method:'DELETE' }); setMessage('تم الحذف.'); await load(); } catch(e) { setMessage(`تعذر الحذف: ${e.message}`); } }
-  async function updateStatus(id, status) {
+  function setBookingInState(id, patch) {
+    setBookings(prev => prev.map(b => b.id === id ? { ...b, ...patch } : b));
+    setSelectedBooking(prev => prev?.id === id ? { ...prev, ...patch } : prev);
+  }
+
+  async function refreshBooking(id) {
     try {
-      setMessage('');
-      const res = await api(`/admin/bookings/${id}/status`, { method:'PATCH', body: JSON.stringify({ status }) });
-      const updated = res?.booking || res;
-      setBookings(prev => prev.map(b => b.id === id ? { ...b, ...updated, status } : b));
-      if (selectedBooking?.id === id) await openBookingDetails({ id });
+      const data = await api(`/admin/bookings/${id}`);
+      if (data?.booking) setBookingInState(id, { ...data.booking, events: data.events || [] });
+      return data?.booking;
+    } catch {
       await load();
-      setMessage('تم تحديث حالة الطلب.');
-    } catch(e) {
-      setMessage(`تعذر تحديث حالة الطلب: ${e.message}`);
-      await load();
+      return null;
     }
   }
-  async function updatePayment(id, payment_status) { await api(`/admin/bookings/${id}/payment`, { method:'PATCH', body: JSON.stringify({ payment_status }) }); await load(); }
+
+  async function updateStatus(id, status) {
+    const key = `status:${id}`;
+    const previous = bookings.find(b => b.id === id)?.status || selectedBooking?.status;
+    try {
+      setMessage('');
+      setUpdating(prev => ({ ...prev, [key]: true }));
+      setBookingInState(id, { status });
+      const res = await api(`/admin/bookings/${id}/status`, { method:'PATCH', body: JSON.stringify({ status }) });
+      const updated = res?.booking || res || {};
+      setBookingInState(id, { ...updated, status: updated.status || status });
+      await refreshBooking(id);
+      setMessage('تم تحديث حالة الطلب وانعكست في الجدول والتفاصيل.');
+    } catch(e) {
+      if (previous) setBookingInState(id, { status: previous });
+      setMessage(`تعذر تحديث حالة الطلب: ${e.message}`);
+      await refreshBooking(id);
+    } finally {
+      setUpdating(prev => { const n = { ...prev }; delete n[key]; return n; });
+    }
+  }
+
+  async function updatePayment(id, payment_status) {
+    const key = `payment:${id}`;
+    const previous = bookings.find(b => b.id === id)?.payment_status || selectedBooking?.payment_status || 'unpaid';
+    try {
+      setMessage('');
+      setUpdating(prev => ({ ...prev, [key]: true }));
+      setBookingInState(id, { payment_status });
+      const updated = await api(`/admin/bookings/${id}/payment`, { method:'PATCH', body: JSON.stringify({ payment_status }) });
+      setBookingInState(id, { ...updated, payment_status: updated?.payment_status || payment_status });
+      await refreshBooking(id);
+      setMessage('تم تحديث حالة الدفع وانعكست في الجدول والتفاصيل.');
+    } catch(e) {
+      setBookingInState(id, { payment_status: previous });
+      setMessage(`تعذر تحديث حالة الدفع: ${e.message}`);
+      await refreshBooking(id);
+    } finally {
+      setUpdating(prev => { const n = { ...prev }; delete n[key]; return n; });
+    }
+  }
+
   async function updatePaymentDetails(b) {
     const payment_status = prompt('حالة الدفع: unpaid / deposit_paid / paid / refunded', b.payment_status || 'unpaid');
     if (payment_status === null) return;
@@ -137,11 +180,37 @@ function App() {
     const payment_reference = prompt('رقم المرجع / التحويل', b.payment_reference || '');
     const payment_proof_url = prompt('رابط إثبات الدفع / الإيصال', b.payment_proof_url || '');
     const payment_notes = prompt('ملاحظات الدفع', b.payment_notes || '');
-    await api(`/admin/bookings/${b.id}/payment-details`, { method:'PATCH', body: JSON.stringify({ payment_status, payment_method, payment_reference, payment_proof_url, payment_notes }) });
-    setMessage('تم تحديث تفاصيل الدفع.');
-    await load();
+    try {
+      const updated = await api(`/admin/bookings/${b.id}/payment-details`, { method:'PATCH', body: JSON.stringify({ payment_status, payment_method, payment_reference, payment_proof_url, payment_notes }) });
+      setBookingInState(b.id, updated || { payment_status, payment_method, payment_reference, payment_proof_url, payment_notes });
+      await refreshBooking(b.id);
+      setMessage('تم تحديث تفاصيل الدفع وانعكست في الطلب.');
+    } catch(e) {
+      setMessage(`تعذر تحديث تفاصيل الدفع: ${e.message}`);
+      await refreshBooking(b.id);
+    }
   }
-  async function assignBeautician(id, artist_id) { await api(`/admin/bookings/${id}/assign-artist`, { method:'PATCH', body: JSON.stringify({ artist_id: artist_id || null, force:true }) }); await load(); }
+
+  async function assignBeautician(id, artist_id) {
+    const key = `assign:${id}`;
+    const previous = bookings.find(b => b.id === id) || selectedBooking || {};
+    const artist = beauticians.find(a => a.id === artist_id);
+    try {
+      setMessage('');
+      setUpdating(prev => ({ ...prev, [key]: true }));
+      setBookingInState(id, { assigned_artist_id: artist_id || null, artist_name: artist?.name || null, status: artist_id ? 'beautician_assigned' : previous.status });
+      const updated = await api(`/admin/bookings/${id}/assign-artist`, { method:'PATCH', body: JSON.stringify({ artist_id: artist_id || null, force:true }) });
+      setBookingInState(id, { ...updated, artist_name: artist?.name || updated?.artist_name || null });
+      await refreshBooking(id);
+      setMessage(artist_id ? 'تم تعيين خبيرة التجميل وانعكس التغيير في الطلب.' : 'تم إلغاء تعيين خبيرة التجميل.');
+    } catch(e) {
+      setBookingInState(id, previous);
+      setMessage(`تعذر تعيين خبيرة التجميل: ${e.message}`);
+      await refreshBooking(id);
+    } finally {
+      setUpdating(prev => { const n = { ...prev }; delete n[key]; return n; });
+    }
+  }
   async function openBookingDetails(b) { try { const data = await api(`/admin/bookings/${b.id}`); setSelectedBooking({ ...data.booking, history: data.history || [], events: data.events || [] }); } catch(e) { setMessage(`تعذر فتح تفاصيل الطلب: ${e.message}`); } }
   async function importSaudiOpenData() { try { const data = await api('/admin/import/saudi-open-data', { method:'POST', body: JSON.stringify({ mode:'all' }) }); setMessage(`تم الاستيراد: مناطق ${data.summary?.regions||0}, مدن ${data.summary?.cities||0}, أحياء ${data.summary?.districts||0}`); await load(); } catch(e) { setMessage(`تعذر الاستيراد: ${e.message}`); } }
   async function uploadAdminImage(file, setter) { if(!file) return; try { const reader = new FileReader(); reader.onload = async () => { const result = await api('/admin/uploads/image', { method:'POST', body: JSON.stringify({ image_data_url: reader.result, folder:'beauty-home-service/admin' }) }); setter(result.url); setMessage('تم رفع الصورة.'); }; reader.readAsDataURL(file); } catch(e) { setMessage(`تعذر رفع الصورة: ${e.message}`); } }
@@ -153,7 +222,7 @@ function App() {
   return <main dir="rtl">
     <header className="header"><div><h1>لوحة إدارة Beauty Home Service</h1><p>إدارة الطلبات وخبيرات التجميل والمواقع والخدمات ومعرض الأعمال</p></div><div className="header-actions"><span className="muted">{adminUser?.name || adminUser?.email}</span><button onClick={load}>تحديث</button><button className="secondary" onClick={logout}>خروج</button></div></header>
     {message && <div className="message">{message}</div>}
-    {selectedBooking && <BookingDetailsModal booking={selectedBooking} beauticians={beauticians} updateStatus={updateStatus} assignBeautician={assignBeautician} updatePayment={updatePayment} updatePaymentDetails={updatePaymentDetails} close={()=>setSelectedBooking(null)} />}
+    {selectedBooking && <BookingDetailsModal booking={selectedBooking} beauticians={beauticians} updateStatus={updateStatus} assignBeautician={assignBeautician} updatePayment={updatePayment} updatePaymentDetails={updatePaymentDetails} updating={updating} close={()=>setSelectedBooking(null)} />}
     <section className="cards"><Card title="كل الطلبات" value={dashboard.total_bookings ?? 0}/><Card title="طلبات جديدة" value={dashboard.new_bookings ?? 0}/><Card title="طلبات اليوم" value={dashboard.today_bookings ?? 0}/><Card title="بدون خبيرة" value={dashboard.unassigned_bookings ?? 0}/><Card title="غير مدفوعة" value={dashboard.unpaid_bookings ?? 0}/><Card title="خبيرات فعالات" value={dashboard.active_beauticians ?? dashboard.active_artists ?? 0}/></section>
 
     <NotificationsPanel notifications={notifications} templates={templates} prepareWhatsApp={prepareWhatsApp} />
@@ -174,7 +243,7 @@ function App() {
 
     <section className="panel"><h2>تقييمات العملاء</h2><table><thead><tr><th>خبيرة التجميل</th><th>العميلة</th><th>التقييم</th><th>التعليق</th><th>التاريخ</th></tr></thead><tbody>{reviews.map(r=><tr key={r.id}><td>{r.beautician_name||'-'}</td><td>{r.customer_name||r.customer_phone||'-'}</td><td>{'★'.repeat(Number(r.rating||0))}</td><td>{r.review_text||'-'}</td><td>{formatDate(r.created_at)}</td></tr>)}</tbody></table></section>
 
-    <section className="panel"><h2>الطلبات</h2><div className="filters"><input placeholder="بحث" value={filters.q} onChange={e=>setFilters({...filters,q:e.target.value})}/><select value={filters.status} onChange={e=>setFilters({...filters,status:e.target.value})}><option value="">كل الحالات</option>{statusOptions.map(([k,v])=><option key={k} value={k}>{v}</option>)}</select><select value={filters.payment} onChange={e=>setFilters({...filters,payment:e.target.value})}><option value="">كل الدفع</option>{paymentOptions.map(([k,v])=><option key={k} value={k}>{v}</option>)}</select><select value={filters.region_id} onChange={e=>setFilters({...filters,region_id:e.target.value,city_id:''})}><OptionList items={catalog.regions} empty="كل المناطق" /></select><select value={filters.city_id} onChange={e=>setFilters({...filters,city_id:e.target.value})}><OptionList items={catalog.cities.filter(c=>!filters.region_id||c.region_id===filters.region_id)} empty="كل المدن" /></select></div><p className="muted">المعروض: {filteredBookings.length} من {bookings.length}</p><table><thead><tr><th>رقم الطلب</th><th>المصدر</th><th>العميلة</th><th>الموقع</th><th>الخدمة</th><th>خبيرة مفضلة</th><th>خبيرة معينة</th><th>التاريخ</th><th>الحالة</th><th>الدفع</th><th>إجراء</th></tr></thead><tbody>{filteredBookings.map((b,i)=><tr key={b.id}><td><b>{b.booking_number||`#${i+1}`}</b><br/><small>{b.id.slice(0,8)}</small></td><td>{b.booking_source_label||b.booking_source||'-'}</td><td>{b.customer_name||'-'}<br/><small>{b.customer_phone||'-'}</small></td><td>{b.region_name||'-'} / {b.city_name||'-'} / {b.district_name||'-'}</td><td>{b.service_category_name||'-'} / {b.service_name||'-'}</td><td>{b.preferred_artist_name||'-'}</td><td>{b.artist_name||'-'}</td><td>{formatDate(b.booking_date)} {formatTime(b.booking_time)}</td><td><select value={b.status} onChange={e=>updateStatus(b.id,e.target.value)}>{statusOptions.map(([k,v])=><option key={k} value={k}>{v}</option>)}</select></td><td><select className="payment-select" value={b.payment_status || 'unpaid'} onChange={e=>updatePayment(b.id,e.target.value)}>{paymentOptions.map(([k,v])=><option key={k} value={k}>{v}</option>)}</select></td><td><button onClick={()=>openBookingDetails(b)}>تفاصيل</button><select value={b.assigned_artist_id||''} onChange={e=>assignBeautician(b.id,e.target.value)}><option value="">تعيين خبيرة</option>{beauticians.filter(a=>a.status==='active').map(a=><option key={a.id} value={a.id}>{a.name}</option>)}</select><button className="mini" onClick={()=>prepareWhatsApp(b)}>واتساب</button><button className="mini" onClick={()=>updatePaymentDetails(b)}>تفاصيل الدفع</button><button className="danger" onClick={()=>deleteItem('/admin/bookings',b.id,'الطلب')}>حذف</button></td></tr>)}</tbody></table></section>
+    <section className="panel"><h2>الطلبات</h2><div className="filters"><input placeholder="بحث" value={filters.q} onChange={e=>setFilters({...filters,q:e.target.value})}/><select value={filters.status} onChange={e=>setFilters({...filters,status:e.target.value})}><option value="">كل الحالات</option>{statusOptions.map(([k,v])=><option key={k} value={k}>{v}</option>)}</select><select value={filters.payment} onChange={e=>setFilters({...filters,payment:e.target.value})}><option value="">كل الدفع</option>{paymentOptions.map(([k,v])=><option key={k} value={k}>{v}</option>)}</select><select value={filters.region_id} onChange={e=>setFilters({...filters,region_id:e.target.value,city_id:''})}><OptionList items={catalog.regions} empty="كل المناطق" /></select><select value={filters.city_id} onChange={e=>setFilters({...filters,city_id:e.target.value})}><OptionList items={catalog.cities.filter(c=>!filters.region_id||c.region_id===filters.region_id)} empty="كل المدن" /></select></div><p className="muted">المعروض: {filteredBookings.length} من {bookings.length}</p><table><thead><tr><th>رقم الطلب</th><th>المصدر</th><th>العميلة</th><th>الموقع</th><th>الخدمة</th><th>خبيرة مفضلة</th><th>خبيرة معينة</th><th>التاريخ</th><th>الحالة</th><th>الدفع</th><th>إجراء</th></tr></thead><tbody>{filteredBookings.map((b,i)=><tr key={b.id}><td><b>{b.booking_number||`#${i+1}`}</b><br/><small>{b.id.slice(0,8)}</small></td><td>{b.booking_source_label||b.booking_source||'-'}</td><td>{b.customer_name||'-'}<br/><small>{b.customer_phone||'-'}</small></td><td>{b.region_name||'-'} / {b.city_name||'-'} / {b.district_name||'-'}</td><td>{b.service_category_name||'-'} / {b.service_name||'-'}</td><td>{b.preferred_artist_name||'-'}</td><td>{b.artist_name||'-'}</td><td>{formatDate(b.booking_date)} {formatTime(b.booking_time)}</td><td><select value={b.status || 'new'} disabled={!!updating[`status:${b.id}`]} onChange={e=>updateStatus(b.id,e.target.value)}>{statusOptions.map(([k,v])=><option key={k} value={k}>{v}</option>)}</select></td><td><select className="payment-select" value={b.payment_status || 'unpaid'} disabled={!!updating[`payment:${b.id}`]} onChange={e=>updatePayment(b.id,e.target.value)}>{paymentOptions.map(([k,v])=><option key={k} value={k}>{v}</option>)}</select></td><td><button onClick={()=>openBookingDetails(b)}>تفاصيل</button><select value={b.assigned_artist_id||''} disabled={!!updating[`assign:${b.id}`]} onChange={e=>assignBeautician(b.id,e.target.value)}><option value="">بدون تعيين</option>{beauticians.filter(a=>a.status==='active').map(a=><option key={a.id} value={a.id}>{a.name}</option>)}</select><button className="mini" onClick={()=>prepareWhatsApp(b)}>واتساب</button><button className="mini" onClick={()=>updatePaymentDetails(b)}>تفاصيل الدفع</button><button className="danger" onClick={()=>deleteItem('/admin/bookings',b.id,'الطلب')}>حذف</button></td></tr>)}</tbody></table></section>
   </main>;
 }
 
@@ -195,8 +264,8 @@ function TemplatesPanel({ templates, templateForm, setTemplateForm, saveTemplate
   return <section className="panel"><h2>قوالب رسائل واتساب</h2><form className="grid4" onSubmit={saveTemplate}><Field label="الكود"><TextInput value={templateForm.code} onChange={v=>setTemplateForm({...templateForm,code:v})} placeholder="confirm_booking" /></Field><Field label="العنوان"><TextInput required value={templateForm.title_ar} onChange={v=>setTemplateForm({...templateForm,title_ar:v})} /></Field><Field label="الحالة"><Select value={templateForm.status} onChange={v=>setTemplateForm({...templateForm,status:v})}><option value="active">فعال</option><option value="inactive">غير فعال</option></Select></Field><Field label="ترتيب"><TextInput type="number" value={templateForm.sort_order} onChange={v=>setTemplateForm({...templateForm,sort_order:Number(v)||0})} /></Field><Field label="نص الرسالة"><textarea value={templateForm.body_ar} onChange={e=>setTemplateForm({...templateForm,body_ar:e.target.value})} placeholder="مرحباً {customer_name} ..." /></Field><div className="actions"><button>حفظ القالب</button></div></form><p className="muted">متغيرات متاحة: {'{customer_name}'} {'{booking_id}'} {'{service_name}'} {'{booking_date}'} {'{booking_time}'} {'{payment_status}'}</p><div className="listbox">{templates.map(t=><div className="listrow" key={t.id}><span><b>{t.title_ar}</b><small>{t.body_ar}</small></span><span><button onClick={()=>{setTemplateForm({...emptyTemplate,...t});setEditing({type:'template',id:t.id});}}>تعديل</button><button className="danger" onClick={()=>deleteItem('/admin/communication-templates',t.id,'القالب')}>حذف</button></span></div>)}</div></section>;
 }
 
-function BookingDetailsModal({ booking, beauticians, updateStatus, assignBeautician, updatePayment, updatePaymentDetails, close }) {
-  return <div className="modal-backdrop"><div className="modal-card"><div className="modal-head"><h2>تفاصيل الطلب {booking.booking_number || ''}</h2><button onClick={close}>إغلاق</button></div><div className="detail-grid"><p><b>رقم الطلب:</b> {booking.booking_number || booking.id}</p><p><b>مصدر الطلب:</b> {booking.booking_source_label || booking.booking_source || '-'}</p><p><b>العميلة:</b> {booking.customer_name || '-'}</p><p><b>الجوال:</b> {booking.customer_phone || '-'}</p><p><b>الموقع:</b> {booking.region_name || '-'} / {booking.city_name || '-'} / {booking.district_name || '-'}</p><p><b>الخدمة:</b> {booking.service_category_name || '-'} / {booking.service_name || '-'}</p><p><b>خبيرة مفضلة:</b> {booking.preferred_artist_name || '-'}</p><p><b>خبيرة معينة:</b> {booking.artist_name || '-'}</p><p><b>التاريخ:</b> {formatDate(booking.booking_date)} {formatTime(booking.booking_time)}</p><p><b>ملاحظات العميلة:</b> {booking.customer_notes || '-'}</p><p><b>حالة الدفع:</b> {paymentLabels[booking.payment_status || 'unpaid']}</p><p><b>طريقة الدفع:</b> {paymentMethodLabels[booking.payment_method] || booking.payment_method || '-'}</p><p><b>مرجع الدفع:</b> {booking.payment_reference || '-'}</p><p><b>إثبات الدفع:</b> {booking.payment_proof_url ? <a href={booking.payment_proof_url} target="_blank">فتح الإيصال</a> : '-'}</p><p><b>طريقة التواصل:</b> {contactLabels[booking.contact_preference] || booking.contact_preference || '-'}</p><p><b>وقت بديل:</b> {booking.alternate_time || '-'}</p></div>{booking.design_image_url && <div className="image-box"><b>صورة التصميم:</b><br/><a href={booking.design_image_url} target="_blank">فتح الصورة</a></div>}<div className="grid3"><Field label="تغيير الحالة"><Select value={booking.status} onChange={v=>updateStatus(booking.id, v)}>{statusOptions.map(([k,v])=><option key={k} value={k}>{v}</option>)}</Select></Field><Field label="حالة الدفع"><Select value={booking.payment_status || 'unpaid'} onChange={v=>updatePayment(booking.id, v)}>{paymentOptions.map(([k,v])=><option key={k} value={k}>{v}</option>)}</Select></Field><div className="field"><span>تفاصيل الدفع</span><button onClick={()=>updatePaymentDetails(booking)}>تعديل تفاصيل الدفع</button></div><Field label="تعيين خبيرة تجميل"><Select value={booking.assigned_artist_id || ''} onChange={v=>assignBeautician(booking.id, v)}><option value="">بدون تعيين</option>{beauticians.filter(a=>a.status==='active').map(a=><option key={a.id} value={a.id}>{a.name}</option>)}</Select></Field></div><div className="timeline"><b>تسلسل الحالة:</b><span>طلب جديد</span><span>جاري المراجعة</span><span>تم التأكيد</span><span>تم التعيين</span><span>مكتمل</span></div><div className="events-box"><b>سجل أحداث الطلب</b>{(booking.events||[]).length ? booking.events.map(ev=><div className="event-row" key={ev.id}><span>{ev.title||ev.event_type}</span><small>{ev.description||''} • {formatDate(ev.created_at)}</small></div>) : <small>لا توجد أحداث مسجلة.</small>}</div></div></div>;
+function BookingDetailsModal({ booking, beauticians, updateStatus, assignBeautician, updatePayment, updatePaymentDetails, updating = {}, close }) {
+  return <div className="modal-backdrop"><div className="modal-card"><div className="modal-head"><h2>تفاصيل الطلب {booking.booking_number || ''}</h2><button onClick={close}>إغلاق</button></div><div className="detail-grid"><p><b>رقم الطلب:</b> {booking.booking_number || booking.id}</p><p><b>مصدر الطلب:</b> {booking.booking_source_label || booking.booking_source || '-'}</p><p><b>العميلة:</b> {booking.customer_name || '-'}</p><p><b>الجوال:</b> {booking.customer_phone || '-'}</p><p><b>الموقع:</b> {booking.region_name || '-'} / {booking.city_name || '-'} / {booking.district_name || '-'}</p><p><b>الخدمة:</b> {booking.service_category_name || '-'} / {booking.service_name || '-'}</p><p><b>خبيرة مفضلة:</b> {booking.preferred_artist_name || '-'}</p><p><b>خبيرة معينة:</b> {booking.artist_name || '-'}</p><p><b>التاريخ:</b> {formatDate(booking.booking_date)} {formatTime(booking.booking_time)}</p><p><b>ملاحظات العميلة:</b> {booking.customer_notes || '-'}</p><p><b>حالة الدفع:</b> {paymentLabels[booking.payment_status || 'unpaid']}</p><p><b>طريقة الدفع:</b> {paymentMethodLabels[booking.payment_method] || booking.payment_method || '-'}</p><p><b>مرجع الدفع:</b> {booking.payment_reference || '-'}</p><p><b>إثبات الدفع:</b> {booking.payment_proof_url ? <a href={booking.payment_proof_url} target="_blank">فتح الإيصال</a> : '-'}</p><p><b>طريقة التواصل:</b> {contactLabels[booking.contact_preference] || booking.contact_preference || '-'}</p><p><b>وقت بديل:</b> {booking.alternate_time || '-'}</p></div>{booking.design_image_url && <div className="image-box"><b>صورة التصميم:</b><br/><a href={booking.design_image_url} target="_blank">فتح الصورة</a></div>}<div className="grid3"><Field label="تغيير الحالة"><Select value={booking.status || 'new'} onChange={v=>updateStatus(booking.id, v)} disabled={!!updating[`status:${booking.id}`]}>{statusOptions.map(([k,v])=><option key={k} value={k}>{v}</option>)}</Select></Field><Field label="حالة الدفع"><Select value={booking.payment_status || 'unpaid'} onChange={v=>updatePayment(booking.id, v)} disabled={!!updating[`payment:${booking.id}`]}>{paymentOptions.map(([k,v])=><option key={k} value={k}>{v}</option>)}</Select></Field><div className="field"><span>تفاصيل الدفع</span><button onClick={()=>updatePaymentDetails(booking)}>تعديل تفاصيل الدفع</button></div><Field label="تعيين خبيرة تجميل"><Select value={booking.assigned_artist_id || ''} onChange={v=>assignBeautician(booking.id, v)} disabled={!!updating[`assign:${booking.id}`]}><option value="">بدون تعيين</option>{beauticians.filter(a=>a.status==='active').map(a=><option key={a.id} value={a.id}>{a.name}</option>)}</Select></Field></div><div className="timeline"><b>تسلسل الحالة:</b><span>طلب جديد</span><span>جاري المراجعة</span><span>تم التأكيد</span><span>تم التعيين</span><span>مكتمل</span></div><div className="events-box"><b>سجل أحداث الطلب</b>{(booking.events||[]).length ? booking.events.map(ev=><div className="event-row" key={ev.id}><span>{ev.title||ev.event_type}</span><small>{ev.description||''} • {formatDate(ev.created_at)}</small></div>) : <small>لا توجد أحداث مسجلة.</small>}</div></div></div>;
 }
 
 function CatalogPanel({ catalog, api, load, setMessage }) {

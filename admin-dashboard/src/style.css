@@ -30,3 +30,9 @@ textarea{min-height:80px;border-radius:14px;border:1px solid #ead8c0;padding:10p
 .events-box{margin-top:16px;border:1px solid #ead8c0;border-radius:16px;background:#fffaf3;padding:12px;display:flex;flex-direction:column;gap:8px}
 .event-row{border-bottom:1px dashed #e0c8aa;padding:8px 0;display:flex;flex-direction:column;gap:3px}.event-row:last-child{border-bottom:0}.event-row span{font-weight:700;color:#6b3f19}.event-row small{color:#8a6a45}
 td small{color:#8a6a45;font-size:11px}
+
+/* v2.1 dropdown reflection fix */
+select:disabled, button:disabled {
+  opacity: 0.65;
+  cursor: wait;
+}
