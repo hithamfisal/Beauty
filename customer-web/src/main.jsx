@@ -59,6 +59,55 @@ function paymentLabel(v) { return PAYMENT_LABELS[String(v || 'unpaid').trim()] |
 function sourceLabel(v, fallback) { return fallback || SOURCE_LABELS[String(v || 'unknown').trim()] || v || 'غير محدد'; }
 
 
+const PHONE_PLACEHOLDER = '05xxxxxxxx';
+function formatSaudiPhoneInput(value) {
+  let digits = String(value || '').replace(/\D/g, '');
+  if (!digits) return '';
+  if (digits.startsWith('9665')) digits = `0${digits.slice(3)}`;
+  else if (digits.startsWith('05')) digits = digits;
+  else if (digits.startsWith('5')) digits = `05${digits.slice(1)}`;
+  else if (digits === '0') digits = '05';
+  else if (digits.startsWith('0') && !digits.startsWith('05')) digits = `05${digits.slice(1)}`;
+  else if (!digits.startsWith('0')) digits = `05${digits}`;
+  return digits.slice(0, 10);
+}
+function phoneMask(value) {
+  const digits = formatSaudiPhoneInput(value);
+  const tail = digits.startsWith('05') ? digits.slice(2, 10) : '';
+  return `05${tail.padEnd(8, 'x')}`;
+}
+function isSaudiPhone(value) { return /^05\d{8}$/.test(formatSaudiPhoneInput(value)); }
+function PhoneInput({ value, onChange, disabled = false, required = false, placeholder = PHONE_PLACEHOLDER }) {
+  const actualValue = formatSaudiPhoneInput(value);
+  const displayValue = phoneMask(actualValue);
+  const updateFromText = text => onChange?.(formatSaudiPhoneInput(text));
+  return <input
+    type="tel"
+    inputMode="numeric"
+    dir="ltr"
+    className="phoneMaskInput"
+    value={displayValue}
+    disabled={disabled}
+    required={required}
+    maxLength={18}
+    placeholder={placeholder}
+    autoComplete="tel"
+    onFocus={e => requestAnimationFrame(() => e.currentTarget.setSelectionRange(e.currentTarget.value.length, e.currentTarget.value.length))}
+    onClick={e => requestAnimationFrame(() => e.currentTarget.setSelectionRange(e.currentTarget.value.length, e.currentTarget.value.length))}
+    onPaste={e => { e.preventDefault(); updateFromText(e.clipboardData.getData('text')); }}
+    onKeyDown={e => {
+      if (e.key === 'Backspace' || e.key === 'Delete') {
+        e.preventDefault();
+        onChange?.(actualValue.length <= 2 ? '' : actualValue.slice(0, -1));
+      }
+    }}
+    onChange={e => updateFromText(e.target.value)}
+    onBlur={e => updateFromText(e.target.value)}
+    title="رقم الجوال يجب أن يكون بصيغة 05xxxxxxxx"
+  />;
+}
+
+
 function Select({ value, onChange, children, disabled }) {
   return <select value={value || ''} onChange={e => onChange(e.target.value)} disabled={disabled}>{children}</select>;
 }
@@ -108,7 +157,7 @@ function App() {
     setBooking(b => ({
       ...b,
       customer_name: b.customer_name || customerData?.name || '',
-      phone: b.phone || customerData?.phone || '',
+      phone: b.phone || formatSaudiPhoneInput(customerData?.phone) || '',
       region_id: b.region_id || customerData?.region_id || defaultAddress?.region_id || '',
       city_id: b.city_id || customerData?.city_id || defaultAddress?.city_id || '',
       district_id: b.district_id || customerData?.district_id || defaultAddress?.district_id || '',
@@ -185,12 +234,14 @@ function App() {
   async function submitBooking(e) {
     e.preventDefault(); setLoading(true); setMessage('');
     try {
-      const payload = { ...booking, customer_phone: booking.phone, phone: booking.phone, people_count: Number(booking.people_count || 1), booking_source: 'web', booking_customer_mode: customerToken && bookingMode === 'account' ? 'account' : 'guest' };
+      const customerPhone = formatSaudiPhoneInput(booking.phone);
+      if (!isSaudiPhone(customerPhone)) throw new Error('رقم الجوال يجب أن يكون بصيغة 05xxxxxxxx');
+      const payload = { ...booking, phone: customerPhone, customer_phone: customerPhone, people_count: Number(booking.people_count || 1), booking_source: 'web', booking_customer_mode: customerToken && bookingMode === 'account' ? 'account' : 'guest' };
       const created = await api('/bookings', { method: 'POST', body: JSON.stringify(payload) });
       setMessage(`تم إرسال الطلب بنجاح. رقم الطلب: ${created.booking_number || created.id}`);
       if (customerToken && bookingMode === 'account' && customer) {
         const defaultAddress = (addresses || []).find(a => a.is_default) || (addresses || [])[0];
-        setBooking({ ...emptyBooking, customer_name: customer?.name || '', phone: customer?.phone || '', region_id: customer?.region_id || defaultAddress?.region_id || '', city_id: customer?.city_id || defaultAddress?.city_id || '', district_id: customer?.district_id || defaultAddress?.district_id || '', address: defaultAddress?.address || '' });
+        setBooking({ ...emptyBooking, customer_name: customer?.name || '', phone: formatSaudiPhoneInput(customer?.phone) || '', region_id: customer?.region_id || defaultAddress?.region_id || '', city_id: customer?.city_id || defaultAddress?.city_id || '', district_id: customer?.district_id || defaultAddress?.district_id || '', address: defaultAddress?.address || '' });
       } else {
         setBooking(emptyBooking);
       }
@@ -202,7 +253,9 @@ function App() {
   async function trackBookings(e) {
     e?.preventDefault?.(); setLoading(true); setMessage('');
     try {
-      const r = await api(`/customer/bookings?phone=${encodeURIComponent(trackingPhone)}`);
+      const normalizedPhone = formatSaudiPhoneInput(trackingPhone);
+      if (!isSaudiPhone(normalizedPhone)) throw new Error('رقم الجوال يجب أن يكون بصيغة 05xxxxxxxx');
+      const r = await api(`/customer/bookings?phone=${encodeURIComponent(normalizedPhone)}`);
       setTrackingResults(r || []);
       if (!r?.length) setMessage('لا توجد طلبات لهذا الرقم.');
     } catch (e) { setMessage(`تعذر متابعة الطلبات: ${e.message}`); }
@@ -218,7 +271,10 @@ function App() {
   async function requestOtp(e) {
     e?.preventDefault?.(); setLoading(true); setMessage('');
     try {
-      const r = await api('/customer/auth/request-otp', { method:'POST', body: JSON.stringify({ phone: authPhone, name: authName }) });
+      const normalizedPhone = formatSaudiPhoneInput(authPhone);
+      if (!isSaudiPhone(normalizedPhone)) throw new Error('رقم الجوال يجب أن يكون بصيغة 05xxxxxxxx');
+      const r = await api('/customer/auth/request-otp', { method:'POST', body: JSON.stringify({ phone: normalizedPhone, name: authName }) });
+      setAuthPhone(normalizedPhone);
       setMessage(`تم إرسال رمز التحقق. رمز التجربة: ${r.dev_otp || 'تم الإرسال'}`);
     } catch(e) { setMessage(`تعذر إرسال رمز التحقق: ${e.message}`); }
     finally { setLoading(false); }
@@ -227,7 +283,10 @@ function App() {
   async function verifyOtp(e) {
     e?.preventDefault?.(); setLoading(true); setMessage('');
     try {
-      const r = await api('/customer/auth/verify-otp', { method:'POST', body: JSON.stringify({ phone: authPhone, otp }) });
+      const normalizedPhone = formatSaudiPhoneInput(authPhone);
+      if (!isSaudiPhone(normalizedPhone)) throw new Error('رقم الجوال يجب أن يكون بصيغة 05xxxxxxxx');
+      const r = await api('/customer/auth/verify-otp', { method:'POST', body: JSON.stringify({ phone: normalizedPhone, otp }) });
+      setAuthPhone(normalizedPhone);
       localStorage.setItem('beauty_customer_token', r.token);
       setCustomerToken(r.token); setCustomer(r.customer); setMessage('تم تسجيل الدخول لحساب العميلة.');
       await loadAccount(r.token);
@@ -242,7 +301,7 @@ function App() {
       const [me, myBookings, myAddresses] = await Promise.all([
         api('/customer/me', { headers }), api('/customer/my-bookings', { headers }), api('/customer/addresses', { headers })
       ]);
-      setCustomer(me); setAuthPhone(me?.phone || ''); setAuthName(me?.name || ''); setAccountBookings(myBookings || []); setAddresses(myAddresses || []); applyCustomerToBooking(me, myAddresses || []);
+      setCustomer(me); setAuthPhone(formatSaudiPhoneInput(me?.phone) || ''); setAuthName(me?.name || ''); setAccountBookings(myBookings || []); setAddresses(myAddresses || []); applyCustomerToBooking(me, myAddresses || []);
     } catch(e) { setMessage(`تعذر تحميل الحساب: ${e.message}`); }
   }
 
@@ -344,7 +403,7 @@ function CustomerAccessStrip({ customerToken, customer, bookingMode, setBookingM
       <div className="signedInActions"><button type="button" onClick={() => setTab('account')}>My Account / Orders</button><button type="button" onClick={logoutCustomer}>Logout</button></div>
     </div> : <form className="quickLogin" onSubmit={verifyOtp}>
       <Input value={authName} onChange={setAuthName} placeholder="اسم العميلة للتسجيل أول مرة" />
-      <Input value={authPhone} onChange={setAuthPhone} placeholder="رقم الجوال 05xxxxxxxx" />
+      <PhoneInput value={authPhone} onChange={setAuthPhone} />
       <button type="button" onClick={requestOtp}>إرسال رمز التحقق</button>
       <Input value={otp} onChange={setOtp} placeholder="رمز التحقق" />
       <button className="primary" type="submit">دخول الحساب</button>
@@ -385,9 +444,9 @@ function BookingForm({ booking, setBookingField, regions, cities, districts, cat
   const selectedService = services.find(s => s.id === booking.service_id);
   const usingAccount = bookingMode === 'account' && customerToken && customer;
   const needAccountLogin = bookingMode === 'account' && !customerToken;
-  return <main className="container"><section className="panel"><h2>طريقة الحجز</h2><div className="modeCards"><button type="button" className={bookingMode === 'account' ? 'mode active' : 'mode'} onClick={()=>setBookingMode('account')}>تسجيل / دخول برقم الهاتف</button><button type="button" className={bookingMode === 'guest' ? 'mode active' : 'mode'} onClick={()=>setBookingMode('guest')}>المتابعة كضيف</button></div>{usingAccount && <div className="accountNotice">تم الدخول كـ <b>{customer?.name || customer?.phone}</b>. سيتم تعبئة الاسم ورقم الجوال والعنوان الافتراضي تلقائياً إن وجد.</div>}{needAccountLogin && <form className="inlineAuth" onSubmit={verifyOtp}><Input value={authName} onChange={setAuthName} placeholder="اسم العميلة للتسجيل أول مرة"/><Input value={authPhone} onChange={setAuthPhone} placeholder="05xxxxxxxx"/><button type="button" onClick={requestOtp}>إرسال الرمز</button><Input value={otp} onChange={setOtp} placeholder="رمز التحقق"/><button className="primary">دخول</button><small>يمكنك أيضاً اختيار المتابعة كضيف وإدخال البيانات داخل الطلب.</small></form>}</section><section className="panel"><h2>طلب حجز</h2><form className="bookingGrid" onSubmit={submitBooking}>
+  return <main className="container"><section className="panel"><h2>طريقة الحجز</h2><div className="modeCards"><button type="button" className={bookingMode === 'account' ? 'mode active' : 'mode'} onClick={()=>setBookingMode('account')}>تسجيل / دخول برقم الهاتف</button><button type="button" className={bookingMode === 'guest' ? 'mode active' : 'mode'} onClick={()=>setBookingMode('guest')}>المتابعة كضيف</button></div>{usingAccount && <div className="accountNotice">تم الدخول كـ <b>{customer?.name || customer?.phone}</b>. سيتم تعبئة الاسم ورقم الجوال والعنوان الافتراضي تلقائياً إن وجد.</div>}{needAccountLogin && <form className="inlineAuth" onSubmit={verifyOtp}><Input value={authName} onChange={setAuthName} placeholder="اسم العميلة للتسجيل أول مرة"/><PhoneInput value={authPhone} onChange={setAuthPhone}/><button type="button" onClick={requestOtp}>إرسال الرمز</button><Input value={otp} onChange={setOtp} placeholder="رمز التحقق"/><button className="primary">دخول</button><small>يمكنك أيضاً اختيار المتابعة كضيف وإدخال البيانات داخل الطلب.</small></form>}</section><section className="panel"><h2>طلب حجز</h2><form className="bookingGrid" onSubmit={submitBooking}>
     <Field label="اسم العميلة"><Input required disabled={usingAccount} value={booking.customer_name} onChange={v=>setBookingField('customer_name',v)} placeholder={usingAccount ? 'من بيانات الحساب' : 'الاسم'} /></Field>
-    <Field label="رقم الجوال"><Input required disabled={usingAccount} value={booking.phone} onChange={v=>setBookingField('phone',v)} placeholder={usingAccount ? 'من بيانات الحساب' : '05xxxxxxxx'} /></Field>
+    <Field label="رقم الجوال"><PhoneInput required disabled={usingAccount} value={booking.phone} onChange={v=>setBookingField('phone',v)} placeholder={usingAccount ? 'من بيانات الحساب' : PHONE_PLACEHOLDER} /></Field>
     <Field label="المنطقة"><Select value={booking.region_id} onChange={v=>setBookingField('region_id',v)}><OptionList items={regions} empty="كل المناطق / اختاري المنطقة" /></Select></Field>
     <Field label="المدينة"><Select value={booking.city_id} onChange={v=>setBookingField('city_id',v)}><OptionList items={cities} empty="كل المدن / اختاري المدينة" /></Select></Field>
     <Field label="الحي"><Select value={booking.district_id} onChange={v=>setBookingField('district_id',v)}><OptionList items={districts} empty="اختاري الحي" /></Select></Field>
@@ -426,7 +485,7 @@ function BeauticianDetails({ data, choose }) {
   return <main className="container"><section className="profile"><div><h2>{b.name}</h2><p>{b.bio || 'خبيرة تجميل منزلية'}</p><div className="badges"><span><Star size={16}/> {b.review_rating || b.rating || '-'}</span><span>{b.main_expertise_name || 'خدمات تجميل'}</span><span>{b.city_name || 'عدة مدن'}</span></div><button className="primary" onClick={() => choose(b.id)}>اختيار هذه الخبيرة للحجز</button></div></section><section className="panel"><h2>معرض الأعمال</h2><PortfolioGrid items={data.portfolio || []}/></section><section className="panel"><h2>تقييمات العميلات</h2>{(data.reviews || []).length ? data.reviews.map(r => <div className="review" key={r.id}><b>⭐ {r.rating}</b><p>{r.review_text}</p></div>) : <p className="empty">لا توجد تقييمات منشورة حالياً.</p>}</section></main>
 }
 function TrackPage({ phone, setPhone, results, submit }) {
-  return <main className="container"><section className="panel"><h2>متابعة الطلب</h2><form className="track" onSubmit={submit}><Input value={phone} onChange={setPhone} placeholder="رقم الجوال"/><button className="primary"><Search size={18}/> بحث</button></form><div className="bookingList">{results.map(b => <div className="bookingCard" key={b.id}><div><b>{b.booking_number || `طلب #${b.id}`}</b><span>{statusLabel(b.status)}</span></div><p>{b.service_name || '-'} • {fmtDate(b.booking_date)} • {shortTime(b.booking_time)} • {sourceLabel(b.booking_source, b.booking_source_label)}</p><p>{b.region_name || '-'} / {b.city_name || '-'} / {b.district_name || '-'}</p>{b.artist_name && <p>الخبيرة المعينة: {b.artist_name}</p>}{b.preferred_artist_name && <p>الخبيرة المفضلة: {b.preferred_artist_name}</p>}<div className="timeline"><span><CheckCircle2 size={16}/> طلب جديد</span><span><Clock3 size={16}/> {statusLabel(b.status || 'under_review')}</span><span><MessageCircle size={16}/> {paymentLabel(b.payment_status)}</span></div></div>)}</div></section></main>
+  return <main className="container"><section className="panel"><h2>متابعة الطلب</h2><form className="track" onSubmit={submit}><PhoneInput value={phone} onChange={setPhone} placeholder="رقم الجوال 05xxxxxxxx"/><button className="primary"><Search size={18}/> بحث</button></form><div className="bookingList">{results.map(b => <div className="bookingCard" key={b.id}><div><b>{b.booking_number || `طلب #${b.id}`}</b><span>{statusLabel(b.status)}</span></div><p>{b.service_name || '-'} • {fmtDate(b.booking_date)} • {shortTime(b.booking_time)} • {sourceLabel(b.booking_source, b.booking_source_label)}</p><p>{b.region_name || '-'} / {b.city_name || '-'} / {b.district_name || '-'}</p>{b.artist_name && <p>الخبيرة المعينة: {b.artist_name}</p>}{b.preferred_artist_name && <p>الخبيرة المفضلة: {b.preferred_artist_name}</p>}<div className="timeline"><span><CheckCircle2 size={16}/> طلب جديد</span><span><Clock3 size={16}/> {statusLabel(b.status || 'under_review')}</span><span><MessageCircle size={16}/> {paymentLabel(b.payment_status)}</span></div></div>)}</div></section></main>
 }
 
 
@@ -440,7 +499,7 @@ function AccountPage({ customerToken, customer, authName, setAuthName, authPhone
     }
     return true;
   });
-  if (!customerToken) return <main className="container"><section className="panel"><h2>حساب العميلة</h2><p className="empty">سجلي الدخول برقم الجوال لعرض طلباتك وعناوينك المحفوظة.</p><form className="track" onSubmit={requestOtp}><input value={authName} onChange={e=>setAuthName(e.target.value)} placeholder="اسم العميلة للتسجيل أول مرة"/><input value={authPhone} onChange={e=>setAuthPhone(e.target.value)} placeholder="05xxxxxxxx"/><button className="primary">إرسال رمز التحقق</button></form><form className="track" onSubmit={verifyOtp}><input value={otp} onChange={e=>setOtp(e.target.value)} placeholder="رمز التحقق"/><button className="primary">دخول</button></form></section></main>;
+  if (!customerToken) return <main className="container"><section className="panel"><h2>حساب العميلة</h2><p className="empty">سجلي الدخول برقم الجوال لعرض طلباتك وعناوينك المحفوظة.</p><form className="track" onSubmit={requestOtp}><input value={authName} onChange={e=>setAuthName(e.target.value)} placeholder="اسم العميلة للتسجيل أول مرة"/><PhoneInput value={authPhone} onChange={setAuthPhone}/><button className="primary">إرسال رمز التحقق</button></form><form className="track" onSubmit={verifyOtp}><input value={otp} onChange={e=>setOtp(e.target.value)} placeholder="رمز التحقق"/><button className="primary">دخول</button></form></section></main>;
   return <main className="container"><section className="panel"><h2>حساب العميلة</h2><p>مرحباً {customer?.name || customer?.phone}</p><button onClick={logoutCustomer}>تسجيل خروج</button></section><section className="panel"><h2>طلباتي</h2>{bookings.length ? bookings.map(b=><div className="bookingCard" key={b.id}><div><b>{b.booking_number || b.id}</b><span>{statusLabel(b.status)}</span></div><p>{b.service_name || '-'} • {fmtDate(b.booking_date)} {shortTime(b.booking_time)}</p><p>{b.region_name || '-'} / {b.city_name || '-'} / {b.district_name || '-'}</p></div>) : <p className="empty">لا توجد طلبات في الحساب.</p>}</section><section className="panel"><h2>العناوين المحفوظة</h2>{addresses.map(a=><div className="bookingCard" key={a.id}><b>{a.label}</b><p>{a.region_name||'-'} / {a.city_name||'-'} / {a.district_name||'-'}</p><p>{a.address}</p></div>)}<form className="bookingGrid" onSubmit={saveAddress}><Field label="اسم العنوان"><Input value={addressForm.label} onChange={v=>setAddressForm({...addressForm,label:v})}/></Field><Field label="المنطقة"><Select value={addressForm.region_id} onChange={v=>setAddressForm({...addressForm,region_id:v,city_id:'',district_id:''})}><OptionList items={regions}/></Select></Field><Field label="المدينة"><Select value={addressForm.city_id} onChange={v=>setAddressForm({...addressForm,city_id:v,district_id:''})}><OptionList items={filteredCities}/></Select></Field><Field label="الحي"><Select value={addressForm.district_id} onChange={v=>setAddressForm({...addressForm,district_id:v})}><OptionList items={filteredDistricts}/></Select></Field><Field label="العنوان التفصيلي"><Input required value={addressForm.address} onChange={v=>setAddressForm({...addressForm,address:v})}/></Field><button className="primary">حفظ العنوان</button></form></section></main>;
 }
 

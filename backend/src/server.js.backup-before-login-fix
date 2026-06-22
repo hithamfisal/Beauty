@@ -3,7 +3,7 @@ import cors from 'cors';
 import dotenv from 'dotenv';
 import { query, transaction } from './db.js';
 import { runMigrations } from './migrations.js';
-import { ApiValidationError, assertUuid, uniqueUuidArray, validateBookingShape, validatePhone, normalizeSaudiPhone, validationResponse } from './validation.js';
+import { ApiValidationError, assertUuid, uniqueUuidArray, validateBookingShape, validatePhone, validationResponse } from './validation.js';
 import jwt from 'jsonwebtoken';
 import bcrypt from 'bcryptjs';
 import { randomInt } from 'node:crypto';
@@ -38,7 +38,7 @@ function normalizeText(value) {
 }
 
 function normalizePhone(value) {
-  return normalizeSaudiPhone(value);
+  return typeof value === 'string' ? value.trim().replace(/\s+/g, '') : value;
 }
 
 function nullable(value) {
@@ -637,43 +637,14 @@ async function initSchemas() {
 }
 
 async function ensureInitialAdmin() {
-  const adminEmail = String(DEFAULT_ADMIN_EMAIL || '').trim().toLowerCase();
-  const adminPassword = String(DEFAULT_ADMIN_PASSWORD || '').trim();
-
-  if (!adminEmail || !adminPassword) return;
-
-  const existing = await query(
-    `SELECT id, email, password_hash FROM admin_users WHERE LOWER(email)=LOWER($1) LIMIT 1`,
-    [adminEmail]
-  );
-
-  if (existing.rows[0]) {
-    const currentHash = existing.rows[0].password_hash || '';
-    const passwordMatches = currentHash
-      ? await bcrypt.compare(adminPassword, currentHash).catch(() => false)
-      : false;
-
-    if (!passwordMatches) {
-      const passwordHash = await bcrypt.hash(adminPassword, 12);
-      await query(
-        `UPDATE admin_users SET password_hash=$1, role='admin', status='active', updated_at=NOW() WHERE id=$2::uuid`,
-        [passwordHash, existing.rows[0].id]
-      );
-    } else {
-      await query(
-        `UPDATE admin_users SET role='admin', status='active', updated_at=NOW() WHERE id=$1::uuid`,
-        [existing.rows[0].id]
-      );
-    }
-
-    return;
-  }
-
-  const passwordHash = await bcrypt.hash(adminPassword, 12);
+  const count = await query(`SELECT COUNT(*)::int AS count FROM admin_users`);
+  if (count.rows[0].count > 0) return;
+  const passwordHash = await bcrypt.hash(DEFAULT_ADMIN_PASSWORD, 12);
   await query(
     `INSERT INTO admin_users (name, email, password_hash, role, status) VALUES ($1,$2,$3,'admin','active')`,
-    ['System Admin', adminEmail, passwordHash]
+    ['System Admin', DEFAULT_ADMIN_EMAIL.toLowerCase(), passwordHash]
   );
+  if (!IS_PRODUCTION) console.log(`Local admin created: ${DEFAULT_ADMIN_EMAIL}`);
 }
 
 await runMigrations();
@@ -758,86 +729,40 @@ async function authenticateAdmin(req, res, next) {
 app.post('/api/admin/login', async (req, res) => {
   try {
     const inputEmail = String(req.body?.email || '').trim().toLowerCase();
-    const inputPassword = String(req.body?.password || '').trim();
+    const inputPassword = String(req.body?.password || '');
 
-    const adminEmail = String(process.env.ADMIN_EMAIL || DEFAULT_ADMIN_EMAIL || '').trim().toLowerCase();
-    const adminPassword = String(process.env.ADMIN_PASSWORD || DEFAULT_ADMIN_PASSWORD || '').trim();
+    const adminEmail = String(process.env.ADMIN_EMAIL || '').trim().toLowerCase();
+    const adminPassword = String(process.env.ADMIN_PASSWORD || '');
 
-    if (!inputEmail || !inputPassword) {
-      return res.status(400).json({ error: 'Email and password are required' });
+    if (!adminEmail || !adminPassword || !process.env.JWT_SECRET) {
+      return res.status(500).json({
+        error: 'Admin login is not configured'
+      });
     }
 
-    if (!JWT_SECRET) {
-      return res.status(500).json({ error: 'Admin login is not configured' });
+    if (inputEmail !== adminEmail || inputPassword !== adminPassword) {
+      return res.status(401).json({
+        error: 'Invalid login details'
+      });
     }
 
-    let user = null;
-
-    if (adminEmail && adminPassword && inputEmail === adminEmail && inputPassword === adminPassword) {
-      const existing = await query(
-        `SELECT id, name, email, role, status FROM admin_users WHERE LOWER(email)=LOWER($1) LIMIT 1`,
-        [adminEmail]
-      );
-
-      if (existing.rows[0]) {
-        user = existing.rows[0];
-
-        if (user.status !== 'active' || user.role !== 'admin') {
-          await query(
-            `UPDATE admin_users SET role='admin', status='active', updated_at=NOW() WHERE id=$1::uuid`,
-            [user.id]
-          );
-          user.role = 'admin';
-          user.status = 'active';
-        }
-      } else {
-        const passwordHash = await bcrypt.hash(adminPassword, 12);
-        const created = await query(
-          `INSERT INTO admin_users (name, email, password_hash, role, status)
-           VALUES ($1,$2,$3,'admin','active')
-           RETURNING id, name, email, role, status`,
-          ['System Admin', adminEmail, passwordHash]
-        );
-        user = created.rows[0];
+    const token = jwt.sign(
+      {
+        role: 'admin',
+        email: adminEmail
+      },
+      process.env.JWT_SECRET,
+      {
+        expiresIn: '12h'
       }
-    }
-
-    if (!user) {
-      const dbUser = await query(
-        `SELECT id, name, email, password_hash, role, status
-         FROM admin_users
-         WHERE LOWER(email)=LOWER($1) AND status='active'
-         LIMIT 1`,
-        [inputEmail]
-      );
-
-      const candidate = dbUser.rows[0];
-      const passwordMatches = candidate?.password_hash
-        ? await bcrypt.compare(inputPassword, candidate.password_hash).catch(() => false)
-        : false;
-
-      if (passwordMatches) user = candidate;
-    }
-
-    if (!user) {
-      return res.status(401).json({ error: 'Invalid login details' });
-    }
-
-    const token = signAdminToken({
-      id: user.id,
-      email: String(user.email || inputEmail).trim().toLowerCase(),
-      role: user.role || 'admin',
-      name: user.name || 'Admin'
-    });
+    );
 
     res.json({
       ok: true,
       token,
       user: {
-        id: user.id,
-        name: user.name || 'Admin',
-        email: String(user.email || inputEmail).trim().toLowerCase(),
-        role: user.role || 'admin'
+        email: adminEmail,
+        role: 'admin'
       }
     });
   } catch (error) {
@@ -852,6 +777,22 @@ app.get(['/api/health', '/health'], (req, res) => {
   res.json({ ok: true, app: 'Beauty Home Service API', version: 'v2.3' });
 });
 
+app.get('/api/debug/admin-env', (req, res) => {
+  const email = process.env.ADMIN_EMAIL || '';
+  const password = process.env.ADMIN_PASSWORD || '';
+
+  res.json({
+    nodeEnv: process.env.NODE_ENV || null,
+    adminEmail: email,
+    adminEmailLength: email.length,
+    adminPasswordLength: password.length,
+    adminPasswordFirstChar: password ? password[0] : null,
+    adminPasswordLastChar: password ? password[password.length - 1] : null,
+    hasJwtSecret: Boolean(process.env.JWT_SECRET),
+    hasDatabaseUrl: Boolean(process.env.DATABASE_URL),
+    corsAllowedOrigins: process.env.CORS_ALLOWED_ORIGINS || null
+  });
+});
 
 app.get('/api/regions', async (req, res) => {
   const result = await query(`SELECT * FROM regions WHERE status='active' ORDER BY sort_order, name_ar`);

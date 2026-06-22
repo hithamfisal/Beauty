@@ -259,6 +259,55 @@ function clean(obj) {
     Object.entries(obj).map(([k, v]) => [k, v === "" ? null : v]),
   );
 }
+
+function formatSaudiPhoneInput(value) {
+  let digits = String(value || '').replace(/\D/g, '');
+  if (!digits) return '';
+  if (digits.startsWith('9665')) digits = `0${digits.slice(3)}`;
+  else if (digits.startsWith('05')) digits = digits;
+  else if (digits.startsWith('5')) digits = `05${digits.slice(1)}`;
+  else if (digits === '0') digits = '05';
+  else if (digits.startsWith('0') && !digits.startsWith('05')) digits = `05${digits.slice(1)}`;
+  else if (!digits.startsWith('0')) digits = `05${digits}`;
+  return digits.slice(0, 10);
+}
+function phoneMask(value) {
+  const digits = formatSaudiPhoneInput(value);
+  const tail = digits.startsWith('05') ? digits.slice(2, 10) : '';
+  return `05${tail.padEnd(8, 'x')}`;
+}
+function PhoneInput({ value, onChange, required = false, disabled = false }) {
+  const actualValue = formatSaudiPhoneInput(value);
+  const displayValue = phoneMask(actualValue);
+  const updateFromText = (text) => onChange(formatSaudiPhoneInput(text));
+  return (
+    <input
+      type="tel"
+      inputMode="numeric"
+      dir="ltr"
+      className="phoneMaskInput"
+      value={displayValue}
+      placeholder="05xxxxxxxx"
+      required={required}
+      disabled={disabled}
+      maxLength={18}
+      autoComplete="tel"
+      title="رقم الجوال يجب أن يكون بصيغة 05xxxxxxxx"
+      onFocus={(e) => requestAnimationFrame(() => e.currentTarget.setSelectionRange(e.currentTarget.value.length, e.currentTarget.value.length))}
+      onClick={(e) => requestAnimationFrame(() => e.currentTarget.setSelectionRange(e.currentTarget.value.length, e.currentTarget.value.length))}
+      onPaste={(e) => { e.preventDefault(); updateFromText(e.clipboardData.getData('text')); }}
+      onKeyDown={(e) => {
+        if (e.key === 'Backspace' || e.key === 'Delete') {
+          e.preventDefault();
+          onChange(actualValue.length <= 2 ? '' : actualValue.slice(0, -1));
+        }
+      }}
+      onChange={(e) => updateFromText(e.target.value)}
+      onBlur={(e) => updateFromText(e.target.value)}
+    />
+  );
+}
+
 function whatsapp(phone, text) {
   const p = String(phone || "").replace(/[^0-9+]/g, "");
   const intl = p.startsWith("0") ? `966${p.slice(1)}` : p.replace(/^\+/, "");
@@ -708,7 +757,8 @@ function App() {
 
   function setBooking(key, value) {
     setBookingForm((prev) => {
-      const next = { ...prev, [key]: value };
+      const normalizedValue = key === "phone" ? formatSaudiPhoneInput(value) : value;
+      const next = { ...prev, [key]: normalizedValue };
       if (key === "region_id") {
         next.city_id = "";
         next.district_id = "";
@@ -720,7 +770,8 @@ function App() {
   }
   function setBeautician(key, value) {
     setBeauticianForm((prev) => {
-      const next = { ...prev, [key]: value };
+      const normalizedValue = key === "phone" ? formatSaudiPhoneInput(value) : value;
+      const next = { ...prev, [key]: normalizedValue };
       if (key === "region_id") next.city_id = "";
       return next;
     });
@@ -1294,7 +1345,7 @@ function App() {
                 />
               </Field>
               <Field label="الجوال">
-                <TextInput
+                <PhoneInput
                   required
                   value={bookingForm.phone}
                   onChange={(v) => setBooking("phone", v)}
@@ -1446,7 +1497,7 @@ function App() {
                 />
               </Field>
               <Field label="الجوال">
-                <TextInput
+                <PhoneInput
                   required
                   value={beauticianForm.phone}
                   onChange={(v) => setBeautician("phone", v)}

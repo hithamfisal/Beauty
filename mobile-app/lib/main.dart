@@ -2,12 +2,50 @@
 
 import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 
 const apiBaseUrl = String.fromEnvironment('API_BASE_URL', defaultValue: 'http://10.0.2.2:4000/api');
 const savedCustomerPhoneKey = 'customer_phone';
-String normalizePhone(String value) => value.trim().replaceAll(RegExp(r'\s+'), '');
+String normalizePhone(String value) {
+  var digits = value.replaceAll(RegExp(r'\D'), '');
+  if (digits.isEmpty) return '';
+  if (digits.startsWith('9665')) digits = '0${digits.substring(3)}';
+  else if (digits.startsWith('05')) digits = digits;
+  else if (digits.startsWith('5')) digits = '05${digits.substring(1)}';
+  else if (digits == '0') digits = '05';
+  else if (digits.startsWith('0') && !digits.startsWith('05')) digits = '05${digits.substring(1)}';
+  else if (!digits.startsWith('0')) digits = '05$digits';
+  if (digits.length > 10) digits = digits.substring(0, 10);
+  return digits;
+}
+String phoneMask(String value) {
+  final digits = normalizePhone(value);
+  final tail = digits.startsWith('05') ? digits.substring(2) : '';
+  final padded = tail.padRight(8, 'x');
+  return '05${padded.substring(0, 8)}';
+}
+bool isValidSaudiPhone(String value) => RegExp(r'^05\d{8}$').hasMatch(normalizePhone(value));
+String? phoneValidator(String? value) => isValidSaudiPhone(value ?? '') ? null : 'رقم الجوال يجب أن يكون بصيغة 05xxxxxxxx';
+class SaudiPhoneTextInputFormatter extends TextInputFormatter {
+  @override
+  TextEditingValue formatEditUpdate(TextEditingValue oldValue, TextEditingValue newValue) {
+    final oldDigits = normalizePhone(oldValue.text);
+    var digits = normalizePhone(newValue.text);
+    final isDeletion = newValue.text.length < oldValue.text.length;
+    if (isDeletion && digits == oldDigits && oldDigits.length > 2) {
+      digits = oldDigits.substring(0, oldDigits.length - 1);
+    }
+    final display = phoneMask(digits);
+    return TextEditingValue(text: display, selection: TextSelection.collapsed(offset: display.length));
+  }
+}
+
+final phoneInputFormatters = <TextInputFormatter>[
+  SaudiPhoneTextInputFormatter(),
+];
+
 
 void main() => runApp(const BeautyHomeServiceApp());
 
@@ -60,7 +98,7 @@ class HomeScreen extends StatefulWidget { const HomeScreen({super.key}); @overri
 class _HomeScreenState extends State<HomeScreen> {
   final phoneController = TextEditingController();
   @override void initState() { super.initState(); loadSavedPhone(); }
-  Future<void> loadSavedPhone() async { final prefs = await SharedPreferences.getInstance(); final saved = prefs.getString(savedCustomerPhoneKey); if (saved != null && mounted) phoneController.text = saved; }
+  Future<void> loadSavedPhone() async { final prefs = await SharedPreferences.getInstance(); final saved = prefs.getString(savedCustomerPhoneKey); if (saved != null && mounted) phoneController.text = phoneMask(saved); }
   @override void dispose() { phoneController.dispose(); super.dispose(); }
   @override Widget build(BuildContext context) => Scaffold(
     backgroundColor: const Color(0xFFFBF4EA),
@@ -68,7 +106,7 @@ class _HomeScreenState extends State<HomeScreen> {
     body: ListView(padding: const EdgeInsets.all(20), children: [
       Container(padding: const EdgeInsets.all(24), decoration: BoxDecoration(borderRadius: BorderRadius.circular(28), gradient: const LinearGradient(colors:[Color(0xFF6B3F19), Color(0xFFB88943)])), child: const Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text('خدمات تجميل منزلية بسهولة', style: TextStyle(color: Colors.white, fontSize: 25, fontWeight: FontWeight.bold)), SizedBox(height:8), Text('اختاري الخدمة، شاهدي نماذج أعمال الخبيرات، ثم ارسلي طلبك.', style: TextStyle(color: Colors.white, fontSize: 15))])),
       const SizedBox(height:20),
-      TextField(controller: phoneController, keyboardType: TextInputType.phone, decoration: inputDecoration('رقم الجوال لمتابعة الطلبات')),
+      TextField(controller: phoneController, keyboardType: TextInputType.phone, inputFormatters: phoneInputFormatters, decoration: inputDecoration('رقم الجوال 05xxxxxxxx لمتابعة الطلبات')),
       const SizedBox(height:12), FilledButton(onPressed:()=>Navigator.push(context, MaterialPageRoute(builder:(_)=>const BookingScreen())), child: const Text('احجزي الآن', style: TextStyle(fontSize:18))),
       const SizedBox(height:10), OutlinedButton(onPressed:()=>Navigator.push(context, MaterialPageRoute(builder: (_) => MyBookingsScreen(phone: normalizePhone(phoneController.text)))), child: const Text('طلباتي')),
       const SizedBox(height:10), OutlinedButton(onPressed:()=>Navigator.push(context, MaterialPageRoute(builder: (_) => const BeauticiansScreen())), child: const Text('تصفحي خبيرات التجميل ونماذج الأعمال')),
@@ -85,7 +123,7 @@ class _BookingScreenState extends State<BookingScreen> {
   List regions=[]; List cities=[]; List districts=[]; List categories=[]; List services=[]; List beauticians=[]; List portfolio=[];
   String? selectedRegionId; String? selectedCityId; String? selectedDistrictId; String? selectedCategoryId; String? selectedServiceId; String? preferredBeauticianId; String contactPreference = 'whatsapp';
   @override void initState(){ super.initState(); loadSavedPhone(); loadInitialLists(); }
-  Future<void> loadSavedPhone() async { final prefs=await SharedPreferences.getInstance(); final saved=prefs.getString(savedCustomerPhoneKey); if(saved!=null&&mounted) phone.text=saved; }
+  Future<void> loadSavedPhone() async { final prefs=await SharedPreferences.getInstance(); final saved=prefs.getString(savedCustomerPhoneKey); if(saved!=null&&mounted) phone.text=phoneMask(saved); }
   @override void dispose(){ name.dispose();phone.dispose();eventType.dispose();people.dispose();address.dispose();notes.dispose();designImageUrl.dispose();alternateTime.dispose();super.dispose(); }
   Future<void> loadInitialLists() async {
     setState(() => loading = true);
@@ -164,7 +202,7 @@ class _BookingScreenState extends State<BookingScreen> {
   @override Widget build(BuildContext context)=>Scaffold(backgroundColor:const Color(0xFFFBF4EA), appBar:AppBar(title:const Text('طلب حجز Beauty Home Service')), body: loading?const Center(child:CircularProgressIndicator()):Form(key:formKey, child:ListView(padding:const EdgeInsets.all(18), children:[
     if(error!=null) Text('تنبيه: $error', style:TextStyle(color:Colors.orange.shade900)),
     TextFormField(controller:name, decoration:inputDecoration('اسم العميلة'), validator:(v)=>requiredValidator(v).isEmpty?null:requiredValidator(v)), const SizedBox(height:12),
-    TextFormField(controller:phone, keyboardType:TextInputType.phone, decoration:inputDecoration('رقم الجوال'), validator:(v)=>requiredValidator(v).isEmpty?null:requiredValidator(v)), const SizedBox(height:12),
+    TextFormField(controller:phone, keyboardType:TextInputType.phone, inputFormatters: phoneInputFormatters, decoration:inputDecoration('رقم الجوال 05xxxxxxxx'), validator:phoneValidator), const SizedBox(height:12),
     dropdown('المنطقة', selectedRegionId, regions, loadCities), const SizedBox(height:12), dropdown('المدينة', selectedCityId, cities, loadDistricts), const SizedBox(height:12), dropdown('الحي', selectedDistrictId, districts, (v)=>setState(()=>selectedDistrictId=v)), const SizedBox(height:12),
     TextFormField(controller:eventType, decoration:inputDecoration('نوع المناسبة'), validator:(v)=>requiredValidator(v).isEmpty?null:requiredValidator(v)), const SizedBox(height:12), dropdown('قسم الخدمة', selectedCategoryId, categories, loadServices, required: false, emptyLabel: 'كل الأقسام'), const SizedBox(height:12), dropdown('الخدمة', selectedServiceId, services, selectService, emptyLabel: 'كل الخدمات / اختاري الخدمة'), const SizedBox(height:12),
     if(portfolio.isNotEmpty) PortfolioStrip(items: portfolio, onTapBeautician: (id){ setState(()=>preferredBeauticianId=id); }),
@@ -184,7 +222,7 @@ class _BeauticianDetailsScreenState extends State<BeauticianDetailsScreen> { boo
 
 class BookingSubmittedScreen extends StatelessWidget { final String? bookingId; final String phone; const BookingSubmittedScreen({super.key, this.bookingId, required this.phone}); @override Widget build(BuildContext context)=>Scaffold(backgroundColor:const Color(0xFFFBF4EA), appBar:AppBar(title:const Text('تم إرسال الطلب')), body:Padding(padding:const EdgeInsets.all(20), child:Column(mainAxisAlignment:MainAxisAlignment.center, crossAxisAlignment:CrossAxisAlignment.stretch, children:[const Icon(Icons.check_circle, size:90, color:Color(0xFF6B3F19)), const SizedBox(height:20), const Text('تم إرسال طلبك بنجاح', textAlign:TextAlign.center, style:TextStyle(fontSize:24,fontWeight:FontWeight.bold)), const SizedBox(height:12), Text('رقم الطلب: ${bookingId ?? '-'}', textAlign:TextAlign.center), const SizedBox(height:30), FilledButton(onPressed:()=>Navigator.pushReplacement(context, MaterialPageRoute(builder:(_)=>MyBookingsScreen(phone:phone))), child:const Text('متابعة طلباتي')), const SizedBox(height:10), OutlinedButton(onPressed:()=>Navigator.popUntil(context,(r)=>r.isFirst), child:const Text('الرئيسية'))]))); }
 class MyBookingsScreen extends StatefulWidget { final String phone; const MyBookingsScreen({super.key, required this.phone}); @override State<MyBookingsScreen> createState()=>_MyBookingsScreenState(); }
-class _MyBookingsScreenState extends State<MyBookingsScreen> { final phoneController=TextEditingController(); bool loading=false; String? error; List bookings=[]; @override void initState(){ super.initState(); phoneController.text=widget.phone; loadInitial(); } Future<void> loadInitial() async { if(phoneController.text.trim().isEmpty){ final prefs=await SharedPreferences.getInstance(); phoneController.text=prefs.getString(savedCustomerPhoneKey)??''; } if(phoneController.text.trim().isNotEmpty) load(); } Future<void> load() async { final phone=normalizePhone(phoneController.text); if(phone.isEmpty){ setState(()=>error='أدخل رقم الجوال'); return; } setState((){loading=true;error=null;}); try{ final data=await ApiClient.get('/customer/bookings?phone=$phone'); final prefs=await SharedPreferences.getInstance(); await prefs.setString(savedCustomerPhoneKey, phone); bookings=safeList(data); }catch(e){error=e.toString();}finally{if(mounted)setState(()=>loading=false);} } @override void dispose(){phoneController.dispose();super.dispose();} @override Widget build(BuildContext context)=>Scaffold(backgroundColor:const Color(0xFFFBF4EA), appBar:AppBar(title:const Text('طلباتي')), body:ListView(padding:const EdgeInsets.all(18), children:[TextField(controller:phoneController, keyboardType:TextInputType.phone, decoration:inputDecoration('رقم الجوال')), const SizedBox(height:10), FilledButton(onPressed:load, child:const Text('بحث')), if(error!=null) Padding(padding:const EdgeInsets.all(10), child:Text(error!, style:const TextStyle(color:Colors.red))), if(loading) const Center(child:CircularProgressIndicator()), if(!loading&&bookings.isEmpty) const Padding(padding:EdgeInsets.all(25), child:Text('لا توجد طلبات', textAlign:TextAlign.center)), ...bookings.map((b)=>BookingCard(booking:b, onReload:load))])); }
+class _MyBookingsScreenState extends State<MyBookingsScreen> { final phoneController=TextEditingController(); bool loading=false; String? error; List bookings=[]; @override void initState(){ super.initState(); phoneController.text=phoneMask(widget.phone); loadInitial(); } Future<void> loadInitial() async { if(phoneController.text.trim().isEmpty){ final prefs=await SharedPreferences.getInstance(); phoneController.text=phoneMask(prefs.getString(savedCustomerPhoneKey)??''); } if(phoneController.text.trim().isNotEmpty) load(); } Future<void> load() async { final phone=normalizePhone(phoneController.text); if(!isValidSaudiPhone(phone)){ setState(()=>error='رقم الجوال يجب أن يكون بصيغة 05xxxxxxxx'); return; } setState((){loading=true;error=null;}); try{ final data=await ApiClient.get('/customer/bookings?phone=$phone'); final prefs=await SharedPreferences.getInstance(); await prefs.setString(savedCustomerPhoneKey, phone); bookings=safeList(data); }catch(e){error=e.toString();}finally{if(mounted)setState(()=>loading=false);} } @override void dispose(){phoneController.dispose();super.dispose();} @override Widget build(BuildContext context)=>Scaffold(backgroundColor:const Color(0xFFFBF4EA), appBar:AppBar(title:const Text('طلباتي')), body:ListView(padding:const EdgeInsets.all(18), children:[TextField(controller:phoneController, keyboardType:TextInputType.phone, inputFormatters: phoneInputFormatters, decoration:inputDecoration('رقم الجوال 05xxxxxxxx')), const SizedBox(height:10), FilledButton(onPressed:load, child:const Text('بحث')), if(error!=null) Padding(padding:const EdgeInsets.all(10), child:Text(error!, style:const TextStyle(color:Colors.red))), if(loading) const Center(child:CircularProgressIndicator()), if(!loading&&bookings.isEmpty) const Padding(padding:EdgeInsets.all(25), child:Text('لا توجد طلبات', textAlign:TextAlign.center)), ...bookings.map((b)=>BookingCard(booking:b, onReload:load))])); }
 class BookingCard extends StatelessWidget { final dynamic booking; final VoidCallback onReload; const BookingCard({super.key, required this.booking, required this.onReload}); @override Widget build(BuildContext context){ final status=booking['status']; return Card(margin:const EdgeInsets.only(bottom:12), child:Padding(padding:const EdgeInsets.all(12), child:Column(crossAxisAlignment:CrossAxisAlignment.start, children:[Text('${booking['booking_number'] ?? booking['id'] ?? '-'}', style:const TextStyle(fontWeight:FontWeight.bold,fontSize:16)), const SizedBox(height:4), Text('${booking['service_category_name'] ?? '-'} / ${booking['service_name'] ?? '-'}', style:const TextStyle(fontWeight:FontWeight.bold)), const SizedBox(height:6), Text('${booking['region_name'] ?? '-'} • ${booking['city_name'] ?? '-'} • ${booking['district_name'] ?? '-'}'), if(booking['preferred_artist_name']!=null) Text('الخبيرة المفضلة: ${booking['preferred_artist_name']}'), if(booking['artist_name']!=null) Text('الخبيرة المعينة: ${booking['artist_name']}'), if((booking['design_image_url']??'').toString().isNotEmpty) Text('تم إرفاق صورة تصميم'), Text('${dateOnly(booking['booking_date'])} • ${timeOnly(booking['booking_time'])}'), const SizedBox(height:8), Text('الحالة: ${statusArabic(status)}'), const SizedBox(height:8), TimelineStatus(current: status?.toString() ?? 'new'), if(status=='completed' && booking['customer_review_rating']==null) Align(alignment:Alignment.centerLeft, child:OutlinedButton(onPressed:()=>showDialog(context:context,builder:(_)=>ReviewDialog(bookingId:booking['id'], onSaved:onReload)), child:const Text('تقييم الخبيرة')))]))) ; } }
 class ReviewDialog extends StatefulWidget { final String bookingId; final VoidCallback onSaved; const ReviewDialog({super.key, required this.bookingId, required this.onSaved}); @override State<ReviewDialog> createState()=>_ReviewDialogState(); }
 class _ReviewDialogState extends State<ReviewDialog> { int rating=5; final note=TextEditingController(); bool saving=false; @override Widget build(BuildContext context)=>AlertDialog(title:const Text('تقييم الخبيرة'), content:Column(mainAxisSize:MainAxisSize.min,children:[DropdownButtonFormField<int>(value:rating, decoration:inputDecoration('التقييم'), items:[1,2,3,4,5].map((x)=>DropdownMenuItem(value:x,child:Text('$x نجوم'))).toList(), onChanged:(v)=>setState(()=>rating=v??5)), const SizedBox(height:10), TextField(controller:note, decoration:inputDecoration('تعليق اختياري'), maxLines:3)]), actions:[TextButton(onPressed:()=>Navigator.pop(context), child:const Text('إلغاء')), FilledButton(onPressed:saving?null:()async{setState(()=>saving=true); try{await ApiClient.post('/customer/reviews', {'booking_id':widget.bookingId,'rating':rating,'review_text':note.text.trim()}); if(context.mounted){Navigator.pop(context); widget.onSaved();}}finally{if(mounted)setState(()=>saving=false);}}, child:const Text('حفظ'))]); }

@@ -1176,3 +1176,11 @@ body {
     min-width: 72px;
   }
 }
+
+
+.phoneMaskInput {
+  direction: ltr;
+  text-align: left;
+  letter-spacing: 0.08em;
+  font-variant-numeric: tabular-nums;
+}

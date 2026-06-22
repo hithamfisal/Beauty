@@ -22,9 +22,17 @@ export function uniqueUuidArray(value, field) {
   return unique;
 }
 
+export function normalizeSaudiPhone(value) {
+  let digits = String(value || '').trim().replace(/\D/g, '');
+  if (digits.startsWith('9665')) digits = `0${digits.slice(3)}`;
+  else if (digits.startsWith('5')) digits = `0${digits}`;
+  digits = digits.slice(0, 10);
+  return digits;
+}
+
 export function validatePhone(value) {
-  const phone = String(value || '').trim().replace(/[\s()-]/g, '');
-  if (!/^\+?\d{8,15}$/.test(phone)) throw new ApiValidationError('A valid phone number is required', { phone: 'invalid' });
+  const phone = normalizeSaudiPhone(value);
+  if (!/^05\d{8}$/.test(phone)) throw new ApiValidationError('Phone number must be in 05xxxxxxxx format', { phone: 'invalid' });
   return phone;
 }
 
