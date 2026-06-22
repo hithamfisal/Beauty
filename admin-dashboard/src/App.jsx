@@ -2,6 +2,8 @@ import React, { useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
   Bell,
+  BarChart3,
+  CalendarDays,
   ChevronDown,
   ClipboardList,
   CreditCard,
@@ -16,6 +18,7 @@ import {
   RefreshCw,
   Sparkles,
   Star,
+  TrendingUp,
   Upload,
   UserRound,
   X,
@@ -175,6 +178,7 @@ const adminNavigation = [
     icon: LayoutDashboard,
     items: [
       { id: "overview", label: "لوحة المعلومات", icon: LayoutDashboard },
+      { id: "analytics", label: "التحليلات", icon: BarChart3 },
       { id: "notifications", label: "تنبيهات الطلبات", icon: Bell },
       { id: "templates", label: "قوالب التواصل", icon: MessageCircle },
     ],
@@ -1214,6 +1218,17 @@ function App() {
           </section>
         )}
 
+        {activeView === "analytics" && (
+          <AnalyticsPanel
+            bookings={bookings}
+            beauticians={beauticians}
+            portfolio={portfolio}
+            reviews={reviews}
+            catalog={catalog}
+            dashboard={dashboard}
+          />
+        )}
+
         {activeView === "notifications" && (
           <NotificationsPanel
             notifications={notifications}
@@ -2140,6 +2155,356 @@ function App() {
         )}
       </main>
     </div>
+  );
+}
+
+
+function numberValue(value) {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : 0;
+}
+
+function shortNumber(value) {
+  const n = numberValue(value);
+  if (n >= 1000000) return `${(n / 1000000).toFixed(1)}م`;
+  if (n >= 1000) return `${(n / 1000).toFixed(1)}ك`;
+  return String(Math.round(n));
+}
+
+function currency(value) {
+  return `${shortNumber(value)} ر.س`;
+}
+
+function bookingRevenue(booking) {
+  return numberValue(
+    booking.final_price ||
+      booking.estimated_price ||
+      booking.deposit_amount ||
+      booking.service_price ||
+      0,
+  );
+}
+
+function monthKey(dateValue) {
+  const d = dateValue ? new Date(dateValue) : null;
+  if (!d || Number.isNaN(d.getTime())) return null;
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+}
+
+function arabicMonthLabel(key) {
+  const [year, month] = String(key || "").split("-").map(Number);
+  if (!year || !month) return "-";
+  return new Date(year, month - 1, 1).toLocaleDateString("ar-SA", {
+    month: "short",
+  });
+}
+
+function buildLast12Months() {
+  const today = new Date();
+  return Array.from({ length: 12 }, (_, idx) => {
+    const d = new Date(today.getFullYear(), today.getMonth() - (11 - idx), 1);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+  });
+}
+
+function groupMetric(items, keyGetter, valueGetter = () => 1) {
+  const map = new Map();
+  items.forEach((item) => {
+    const key = keyGetter(item) || "غير محدد";
+    map.set(key, (map.get(key) || 0) + valueGetter(item));
+  });
+  return [...map.entries()]
+    .map(([label, value]) => ({ label, value }))
+    .sort((a, b) => b.value - a.value);
+}
+
+function MiniLineChart({ data }) {
+  const values = data.map((x) => numberValue(x.value));
+  const max = Math.max(1, ...values);
+  const width = 720;
+  const height = 210;
+  const step = data.length > 1 ? width / (data.length - 1) : width;
+  const points = data
+    .map((item, idx) => {
+      const x = idx * step;
+      const y = height - (numberValue(item.value) / max) * (height - 24) - 12;
+      return `${x},${y}`;
+    })
+    .join(" ");
+  const areaPoints = `0,${height} ${points} ${width},${height}`;
+
+  return (
+    <div className="analytics-line-wrap">
+      <svg viewBox={`0 0 ${width} ${height}`} className="analytics-line-chart">
+        {[0, 1, 2, 3, 4].map((i) => {
+          const y = 12 + i * ((height - 24) / 4);
+          return <line key={i} x1="0" x2={width} y1={y} y2={y} />;
+        })}
+        <polygon points={areaPoints} />
+        <polyline points={points} />
+        {data.map((item, idx) => {
+          const x = idx * step;
+          const y = height - (numberValue(item.value) / max) * (height - 24) - 12;
+          return <circle key={item.label} cx={x} cy={y} r="4" />;
+        })}
+      </svg>
+      <div className="analytics-axis">
+        {data.map((item) => (
+          <span key={item.label}>{item.label}</span>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function VerticalBars({ data, valueSuffix = "" }) {
+  const max = Math.max(1, ...data.map((x) => numberValue(x.value)));
+  return (
+    <div className="analytics-bars">
+      {data.map((item) => (
+        <div className="analytics-bar-item" key={item.label}>
+          <div className="analytics-bar-track">
+            <span style={{ height: `${Math.max(8, (numberValue(item.value) / max) * 100)}%` }} />
+          </div>
+          <b>{shortNumber(item.value)}{valueSuffix}</b>
+          <small>{item.label}</small>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function HorizontalBars({ data, valueFormatter = shortNumber }) {
+  const max = Math.max(1, ...data.map((x) => numberValue(x.value)));
+  return (
+    <div className="analytics-hbars">
+      {data.map((item) => (
+        <div className="analytics-hbar" key={item.label}>
+          <div className="analytics-hbar-head">
+            <span>{item.label}</span>
+            <b>{valueFormatter(item.value)}</b>
+          </div>
+          <div className="analytics-hbar-track">
+            <span style={{ width: `${Math.max(5, (numberValue(item.value) / max) * 100)}%` }} />
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function AnalyticsStatCard({ title, value, sub, icon: Icon }) {
+  return (
+    <div className="analytics-stat-card">
+      <div className="analytics-stat-icon">{Icon && <Icon size={24} />}</div>
+      <div>
+        <span>{title}</span>
+        <b>{value}</b>
+        {sub && <small>{sub}</small>}
+      </div>
+    </div>
+  );
+}
+
+function AnalyticsPanel({ bookings, beauticians, portfolio, reviews, catalog, dashboard }) {
+  const analytics = useMemo(() => {
+    const safeBookings = Array.isArray(bookings) ? bookings : [];
+    const safeBeauticians = Array.isArray(beauticians) ? beauticians : [];
+    const totalBookings = safeBookings.length;
+    const completed = safeBookings.filter((b) => b.status === "completed").length;
+    const newBookings = safeBookings.filter((b) => b.status === "new").length;
+    const unassigned = safeBookings.filter(
+      (b) => !b.assigned_artist_id && !["completed", "cancelled"].includes(b.status),
+    ).length;
+    const unpaid = safeBookings.filter((b) => (b.payment_status || "unpaid") !== "paid").length;
+    const customers = new Set(safeBookings.map((b) => b.customer_phone || b.phone).filter(Boolean)).size;
+    const revenue = safeBookings.reduce((sum, b) => sum + bookingRevenue(b), 0);
+    const paidRevenue = safeBookings
+      .filter((b) => b.payment_status === "paid")
+      .reduce((sum, b) => sum + bookingRevenue(b), 0);
+    const activeBeauticians = safeBeauticians.filter((a) => a.status === "active").length;
+    const ratingValues = [...safeBeauticians, ...(Array.isArray(reviews) ? reviews : [])]
+      .map((x) => numberValue(x.review_rating || x.overall_rating || x.rating))
+      .filter((x) => x > 0);
+    const avgRating = ratingValues.length
+      ? ratingValues.reduce((a, b) => a + b, 0) / ratingValues.length
+      : 0;
+
+    const months = buildLast12Months();
+    const monthly = months.map((key) => ({
+      key,
+      label: arabicMonthLabel(key),
+      value: safeBookings.filter((b) => monthKey(b.booking_date || b.created_at) === key).length,
+      revenue: safeBookings
+        .filter((b) => monthKey(b.booking_date || b.created_at) === key)
+        .reduce((sum, b) => sum + bookingRevenue(b), 0),
+    }));
+
+    const byService = groupMetric(
+      safeBookings,
+      (b) => b.service_name || b.service_category_name || "غير محدد",
+    ).slice(0, 6);
+    const byCategory = groupMetric(
+      safeBookings,
+      (b) => b.service_category_name || b.service_name || "غير محدد",
+    ).slice(0, 6);
+    const byCity = groupMetric(safeBookings, (b) => b.city_name || b.region_name || "غير محدد").slice(0, 5);
+    const byStatus = groupMetric(
+      safeBookings,
+      (b) => statusLabels[b.status] || b.status_label || b.status || "غير محدد",
+    );
+    const byPayment = groupMetric(
+      safeBookings,
+      (b) => paymentLabels[b.payment_status || "unpaid"] || b.payment_status || "غير مدفوع",
+    );
+    const byBeautician = groupMetric(
+      safeBookings.filter((b) => b.artist_name),
+      (b) => b.artist_name,
+    ).slice(0, 5);
+    const serviceRevenue = groupMetric(
+      safeBookings,
+      (b) => b.service_name || b.service_category_name || "غير محدد",
+      bookingRevenue,
+    ).slice(0, 5);
+
+    return {
+      totalBookings,
+      completed,
+      newBookings,
+      unassigned,
+      unpaid,
+      customers,
+      revenue,
+      paidRevenue,
+      activeBeauticians,
+      avgRating,
+      completionRate: totalBookings ? Math.round((completed / totalBookings) * 100) : 0,
+      paymentRate: revenue ? Math.round((paidRevenue / revenue) * 100) : 0,
+      monthly,
+      byService,
+      byCategory,
+      byCity,
+      byStatus,
+      byPayment,
+      byBeautician,
+      serviceRevenue,
+      portfolioCount: Array.isArray(portfolio) ? portfolio.length : 0,
+      servicesCount: Array.isArray(catalog?.services) ? catalog.services.length : 0,
+      categoriesCount: Array.isArray(catalog?.service_categories) ? catalog.service_categories.length : 0,
+    };
+  }, [bookings, beauticians, portfolio, reviews, catalog]);
+
+  return (
+    <section className="analytics-page">
+      <div className="analytics-tabs">
+        <span className="is-active">ملخص الإدارة</span>
+        <span>الخدمات والأسعار</span>
+        <span>العملاء</span>
+        <span>المحترفون</span>
+        <span>الحجوزات</span>
+      </div>
+
+      <div className="analytics-stat-grid">
+        <AnalyticsStatCard
+          title="إجمالي الإيرادات"
+          value={currency(analytics.revenue || dashboard?.total_revenue || 0)}
+          sub="Quick Stats"
+          icon={CreditCard}
+        />
+        <AnalyticsStatCard title="حجوزات جديدة" value={analytics.newBookings} icon={CalendarDays} />
+        <AnalyticsStatCard title="المتخصصون النشطون" value={analytics.activeBeauticians} icon={UserRound} />
+        <AnalyticsStatCard title="عملاء جدد" value={analytics.customers} icon={UserRound} />
+        <AnalyticsStatCard title="نسبة الإنجاز" value={`${analytics.completionRate}%`} sub="Completed" icon={TrendingUp} />
+        <AnalyticsStatCard title="طلبات غير مدفوعة" value={analytics.unpaid} sub="Pending collection" icon={Bell} />
+      </div>
+
+      <div className="analytics-grid-main">
+        <section className="analytics-card analytics-wide">
+          <div className="analytics-card-head">
+            <div>
+              <h2>حجوزات الشهور</h2>
+              <p>اتجاه عدد الحجوزات خلال آخر 12 شهر</p>
+            </div>
+            <select defaultValue="bookings">
+              <option value="bookings">عدد الحجوزات</option>
+            </select>
+          </div>
+          <MiniLineChart data={analytics.monthly} />
+        </section>
+
+        <section className="analytics-card">
+          <div className="analytics-card-head">
+            <div>
+              <h2>حالات الطلبات</h2>
+              <p>توزيع الطلبات حسب الحالة الحالية</p>
+            </div>
+          </div>
+          <HorizontalBars data={analytics.byStatus.slice(0, 7)} />
+        </section>
+      </div>
+
+      <div className="analytics-grid-two">
+        <section className="analytics-card">
+          <div className="analytics-card-head">
+            <div>
+              <h2>أداء الخدمات</h2>
+              <p>أكثر الخدمات طلباً</p>
+            </div>
+          </div>
+          <VerticalBars data={analytics.byService.slice(0, 5)} />
+        </section>
+
+        <section className="analytics-card">
+          <div className="analytics-card-head">
+            <div>
+              <h2>إيرادات الخدمات</h2>
+              <p>أعلى الخدمات في القيمة المالية</p>
+            </div>
+          </div>
+          <HorizontalBars data={analytics.serviceRevenue} valueFormatter={currency} />
+        </section>
+      </div>
+
+      <div className="analytics-grid-two compact">
+        <section className="analytics-card">
+          <h2>المدن الأعلى طلباً</h2>
+          <HorizontalBars data={analytics.byCity} />
+        </section>
+        <section className="analytics-card">
+          <h2>أداء الخبيرات</h2>
+          <HorizontalBars data={analytics.byBeautician.length ? analytics.byBeautician : [{ label: "لا توجد تعيينات", value: 0 }]} />
+        </section>
+        <section className="analytics-card">
+          <h2>حالة التحصيل</h2>
+          <HorizontalBars data={analytics.byPayment} />
+        </section>
+      </div>
+
+      <section className="analytics-card">
+        <div className="analytics-card-head">
+          <div>
+            <h2>مؤشرات تشغيلية سريعة</h2>
+            <p>بيانات مساندة للمتابعة اليومية</p>
+          </div>
+        </div>
+        <table>
+          <thead>
+            <tr>
+              <th>المؤشر</th>
+              <th>القيمة</th>
+              <th>ملاحظة</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr><td>عدد أقسام الخدمات</td><td>{analytics.categoriesCount}</td><td>من كتالوج الخدمات</td></tr>
+            <tr><td>عدد الخدمات</td><td>{analytics.servicesCount}</td><td>الخدمات المتاحة للحجز</td></tr>
+            <tr><td>نماذج أعمال الخبيرات</td><td>{analytics.portfolioCount}</td><td>المعرض المنشور والمدار من الإدارة</td></tr>
+            <tr><td>متوسط التقييم</td><td>{analytics.avgRating ? analytics.avgRating.toFixed(1) : "-"}</td><td>من تقييمات الخبيرات والعملاء</td></tr>
+            <tr><td>نسبة التحصيل من القيمة المسجلة</td><td>{analytics.paymentRate}%</td><td>حسب الطلبات المسجلة لها قيمة مالية</td></tr>
+          </tbody>
+        </table>
+      </section>
+    </section>
   );
 }
 
