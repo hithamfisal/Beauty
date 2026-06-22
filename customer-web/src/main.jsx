@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { CalendarDays, MapPin, Search, Sparkles, Star, UserCheck, MessageCircle, ImagePlus, Clock3, CheckCircle2 } from 'lucide-react';
+import { CalendarDays, MapPin, Search, Sparkles, Star, UserCheck, MessageCircle, ImagePlus, Clock3, CheckCircle2, Home as HomeIcon, PlusSquare, Users, ClipboardList, UserCircle, Bell, Phone, LogIn, ShieldCheck, Scissors, Palette, Heart, ChevronRight } from 'lucide-react';
 import './style.css';
 
 const API_BASE = (import.meta.env.VITE_API_BASE_URL || 'http://localhost:4000/api').replace(/\/+$/, '');
@@ -268,19 +268,29 @@ function App() {
   }), [districts, cities, booking.city_id, booking.region_id]);
   const bookingServices = useMemo(() => services.filter(s => !booking.service_category_id || s.category_id === booking.service_category_id), [services, booking.service_category_id]);
 
+  const navItems = [
+    { id: 'home', label: 'Home', ar: 'الرئيسية', icon: <HomeIcon size={22}/> },
+    { id: 'booking', label: 'Request Booking', ar: 'طلب حجز', icon: <PlusSquare size={22}/> },
+    { id: 'beauticians', label: 'Experts', ar: 'الخبيرات', icon: <Users size={22}/> },
+    { id: 'track', label: 'Order Tracking', ar: 'متابعة الطلب', icon: <ClipboardList size={22}/> },
+    { id: 'account', label: 'My Account', ar: 'حسابي', icon: <UserCircle size={22}/> }
+  ];
+
   return <div className="app">
-    <header className="hero">
-      <nav>
-        <b>Beauty Home Service</b>
-        <div>
-          <button onClick={() => setTab('home')}>الرئيسية</button>
-          <button onClick={() => setTab('booking')}>طلب حجز</button>
-          <button onClick={() => setTab('beauticians')}>الخبيرات</button>
-          <button onClick={() => setTab('track')}>متابعة الطلب</button><button onClick={() => setTab('account')}>حسابي</button>
-        </div>
+    <header className="siteHeader">
+      <div className="brandBlock" onClick={() => setTab('home')} role="button" tabIndex={0}>
+        <div className="brandMark"><Sparkles size={30}/></div>
+        <div><b>Beauty</b><b>Home Service</b></div>
+      </div>
+      <nav className="topNav" aria-label="Customer navigation">
+        {navItems.map(item => <button key={item.id} className={tab === item.id ? 'active' : ''} onClick={() => setTab(item.id)}>{item.icon}<span>{item.label}</span><small>{item.ar}</small></button>)}
       </nav>
-      <section className="heroText"><span>خدمات تجميل منزلية</span><h1>احجزي خدمتك بسهولة وشاهدي أعمال الخبيرات قبل الاختيار</h1><p>واجهة عميلة تعمل على الكمبيوتر والمتصفح وترتبط مباشرة بالسيرفر السحابي.</p><button className="primary" onClick={() => setTab('booking')}>ابدئي طلب حجز</button></section>
+      <div className="headerActions"><Search size={22}/><Bell size={22}/></div>
     </header>
+
+    <section className="hero">
+      <div className="heroText"><span>خدمات تجميل منزلية</span><h1>احجزي خدمتك بسهولة وشاهدي أعمال الخبيرات قبل الاختيار</h1><p>واجهة عميلة منظمة للحجز، عرض النماذج، متابعة الطلبات، والدخول برقم الجوال.</p><button className="primary" onClick={() => setTab('booking')}>ابدئي طلب حجز</button></div>
+    </section>
 
     <CustomerAccessStrip
       customerToken={customerToken}
@@ -309,7 +319,7 @@ function App() {
     {tab === 'track' && <TrackPage phone={trackingPhone} setPhone={setTrackingPhone} results={trackingResults} submit={trackBookings} />}
     {tab === 'account' && <AccountPage customerToken={customerToken} customer={customer} authName={authName} setAuthName={setAuthName} authPhone={authPhone} setAuthPhone={setAuthPhone} otp={otp} setOtp={setOtp} requestOtp={requestOtp} verifyOtp={verifyOtp} logoutCustomer={logoutCustomer} bookings={accountBookings} addresses={addresses} addressForm={addressForm} setAddressForm={setAddressForm} saveAddress={saveAddress} regions={regions} cities={cities} districts={districts} />}
 
-    <footer>Beauty Home Service © بوابة العميلة</footer>
+    <SiteFooter setTab={setTab} />
   </div>;
 }
 
@@ -321,17 +331,17 @@ function CustomerAccessStrip({ customerToken, customer, bookingMode, setBookingM
       <div>
         <span className="eyebrow">دخول العميلة</span>
         <h2>احجزي بحسابك أو تابعي كضيفة</h2>
-        <p>عند الدخول برقم الجوال يتم تعبئة الاسم ورقم الجوال والعنوان المحفوظ تلقائياً داخل الطلب.</p>
+        <p>الحساب يعبئ الاسم ورقم الجوال والعنوان المحفوظ تلقائياً، والضيف يدخل البيانات داخل الطلب.</p>
       </div>
       <div className="accessActions">
-        <button type="button" className={bookingMode === 'account' ? 'mode active' : 'mode'} onClick={() => { setBookingMode('account'); setTab('booking'); }}>تسجيل / دخول برقم الهاتف</button>
-        <button type="button" className={bookingMode === 'guest' ? 'mode active' : 'mode'} onClick={() => { setBookingMode('guest'); setTab('booking'); }}>المتابعة كضيف</button>
+        <button type="button" className={bookingMode === 'account' ? 'mode active' : 'mode'} onClick={() => { setBookingMode('account'); setTab('booking'); }}><LogIn size={18}/> تسجيل / دخول برقم الهاتف</button>
+        <button type="button" className={bookingMode === 'guest' ? 'mode active' : 'mode'} onClick={() => { setBookingMode('guest'); setTab('booking'); }}><UserCircle size={18}/> المتابعة كضيف</button>
       </div>
     </div>
 
     {isLoggedIn ? <div className="signedInBox">
-      <div><b>تم الدخول:</b> {customer?.name || customer?.phone}</div>
-      <div className="signedInActions"><button type="button" onClick={() => setTab('account')}>عرض حسابي وطلباتي</button><button type="button" onClick={logoutCustomer}>تسجيل خروج</button></div>
+      <div className="signedProfile"><img src="https://images.unsplash.com/photo-1494790108377-be9c29b29330?q=80&w=300&auto=format&fit=crop" alt="customer"/><div><b>{customer?.name || customer?.phone}</b><small>{customer?.phone}</small></div></div>
+      <div className="signedInActions"><button type="button" onClick={() => setTab('account')}>My Account / Orders</button><button type="button" onClick={logoutCustomer}>Logout</button></div>
     </div> : <form className="quickLogin" onSubmit={verifyOtp}>
       <Input value={authName} onChange={setAuthName} placeholder="اسم العميلة للتسجيل أول مرة" />
       <Input value={authPhone} onChange={setAuthPhone} placeholder="رقم الجوال 05xxxxxxxx" />
@@ -339,20 +349,38 @@ function CustomerAccessStrip({ customerToken, customer, bookingMode, setBookingM
       <Input value={otp} onChange={setOtp} placeholder="رمز التحقق" />
       <button className="primary" type="submit">دخول الحساب</button>
       <button type="button" className="guestBtn" onClick={() => { setBookingMode('guest'); setTab('booking'); }}>حجز كضيف</button>
-      <small>رمز الاختبار المحلي: 1234. في الإنتاج يتم إرسال الرمز عبر مزود الرسائل عند تفعيله.</small>
+      <small>رمز الاختبار المحلي: 1234. عند تفعيل الرسائل سيتم إرسال الرمز للعميلة.</small>
     </form>}
   </section>;
 }
 
 function Home({ categories, portfolio, beauticians, setTab, openBeautician }) {
-  return <main className="container">
-    <div className="stats"><Card icon={<Sparkles/>} title="أقسام الخدمات" value={categories.length}/><Card icon={<UserCheck/>} title="خبيرات التجميل" value={beauticians.length}/><Card icon={<ImagePlus/>} title="نماذج الأعمال" value={portfolio.length}/></div>
-    <section className="panel"><h2>أقسام الخدمات</h2><div className="chips">{categories.map(c => <span key={c.id}>{label(c)}</span>)}</div></section>
-    <section className="panel"><h2>نماذج مميزة من أعمال الخبيرات</h2><PortfolioGrid items={portfolio.slice(0,8)} /></section>
-    <section className="panel"><h2>خبيرات مميزات</h2><BeauticianGrid items={beauticians.slice(0,6)} openBeautician={openBeautician} /></section>
+  const previewCategories = categories.slice(0, 10);
+  const serviceIcons = [<Scissors/>, <Palette/>, <Sparkles/>, <Heart/>];
+  return <main className="container homeLayout">
+    <section className="dashStats">
+      <Card icon={<Scissors/>} title="Service Sections" sub="أقسام الخدمات" value={categories.length}/>
+      <Card icon={<UserCheck/>} title="Beauty Experts" sub="خبيرات متاحات" value={beauticians.length}/>
+      <Card icon={<ImagePlus/>} title="Portfolio Samples" sub="نماذج أعمال" value={portfolio.length}/>
+    </section>
+
+    <section className="panel servicePanel">
+      <div className="sectionTitle"><div><small>اختاري القسم المناسب</small><h2>أقسام الخدمات</h2></div><button className="linkBtn" onClick={() => setTab('booking')}>ابدئي الحجز <ChevronRight size={16}/></button></div>
+      <div className="serviceChips">{previewCategories.map((c, i) => <button key={c.id} onClick={() => setTab('booking')}><span>{serviceIcons[i % serviceIcons.length]}</span>{label(c)}</button>)}</div>
+    </section>
+
+    <section className="panel portfolioPanel">
+      <div className="sectionTitle"><div><small>شاهدي قبل الاختيار</small><h2>نماذج مميزة من أعمال الخبيرات</h2></div><button className="linkBtn" onClick={() => setTab('beauticians')}>عرض الخبيرات <ChevronRight size={16}/></button></div>
+      <PortfolioGrid items={portfolio.slice(0,4)} compact />
+    </section>
+
+    <section className="panel expertStrip">
+      <div className="sectionTitle"><div><small>اختيار سريع</small><h2>خبيرات مميزات</h2></div></div>
+      <BeauticianGrid items={beauticians.slice(0,3)} openBeautician={openBeautician} compact />
+    </section>
   </main>
 }
-function Card({ icon, title, value }) { return <div className="stat">{icon}<strong>{value}</strong><span>{title}</span></div> }
+function Card({ icon, title, sub, value }) { return <div className="stat"><div className="statIcon">{icon}</div><div><strong>{value}</strong><span>{title}</span>{sub && <small>{sub}</small>}</div></div> }
 function BookingForm({ booking, setBookingField, regions, cities, districts, categories, services, beauticians, portfolio, uploadImage, submitBooking, openBeautician, customerToken, customer, bookingMode, setBookingMode, authName, setAuthName, authPhone, setAuthPhone, otp, setOtp, requestOtp, verifyOtp }) {
   const selectedService = services.find(s => s.id === booking.service_id);
   const usingAccount = bookingMode === 'account' && customerToken && customer;
@@ -381,13 +409,13 @@ function BookingForm({ booking, setBookingField, regions, cities, districts, cat
   <section className="panel"><h2>نماذج مرتبطة بالخدمة</h2><PortfolioGrid items={portfolio.slice(0,8)} /></section>
   <section className="panel"><h2>خبيرات مناسبات</h2><BeauticianGrid items={beauticians.slice(0,8)} openBeautician={openBeautician} /></section></main>
 }
-function PortfolioGrid({ items }) {
+function PortfolioGrid({ items, compact = false }) {
   if (!items.length) return <p className="empty">لا توجد نماذج أعمال منشورة حالياً.</p>;
-  return <div className="portfolioGrid">{items.map(p => <div className="portfolioCard" key={p.id}>{p.image_url && <img src={p.image_url} alt={p.title_ar || 'نموذج عمل'}/>}<b>{p.title_ar}</b><small>{p.beautician_name || '-'} • {p.service_name || p.category_name || '-'}</small><p>{p.description || ''}</p></div>)}</div>;
+  return <div className={compact ? "portfolioGrid compact" : "portfolioGrid"}>{items.map(p => <div className="portfolioCard" key={p.id}>{p.image_url && <img src={p.image_url} alt={p.title_ar || 'نموذج عمل'}/>}<b>{p.title_ar}</b><small>{p.beautician_name || '-'} • {p.service_name || p.category_name || '-'}</small><p>{p.description || ''}</p><button type="button">عرض التفاصيل</button></div>)}</div>;
 }
-function BeauticianGrid({ items, openBeautician }) {
+function BeauticianGrid({ items, openBeautician, compact = false }) {
   if (!items.length) return <p className="empty">لا توجد خبيرات مطابقة حالياً.</p>;
-  return <div className="beauticianGrid">{items.map(b => <div className="beauticianCard" key={b.id}><img src={b.featured_image_url || b.first_image_url || 'https://images.unsplash.com/photo-1522335789203-aabd1fc54bc9?q=80&w=800&auto=format&fit=crop'} alt={b.name}/><div><h3>{b.name}</h3><p>{b.main_expertise_name || 'خبيرة تجميل'} • {b.city_name || 'عدة مدن'}</p><span><Star size={16}/> {b.review_rating || b.rating || '-'} • {b.portfolio_count || 0} أعمال</span><button onClick={() => openBeautician(b.id)}>عرض التفاصيل</button></div></div>)}</div>;
+  return <div className={compact ? "beauticianGrid compact" : "beauticianGrid"}>{items.map(b => <div className="beauticianCard" key={b.id}><img src={b.featured_image_url || b.first_image_url || 'https://images.unsplash.com/photo-1522335789203-aabd1fc54bc9?q=80&w=800&auto=format&fit=crop'} alt={b.name}/><div><h3>{b.name}</h3><p>{b.main_expertise_name || 'خبيرة تجميل'} • {b.city_name || 'عدة مدن'}</p><span><Star size={16}/> {b.review_rating || b.rating || '-'} • {b.portfolio_count || 0} أعمال</span><button onClick={() => openBeautician(b.id)}>عرض التفاصيل</button></div></div>)}</div>;
 }
 function BeauticiansPage({ beauticians, portfolio, openBeautician }) {
   return <main className="container"><section className="panel"><h2>خبيرات التجميل</h2><BeauticianGrid items={beauticians} openBeautician={openBeautician}/></section><section className="panel"><h2>معرض الأعمال</h2><PortfolioGrid items={portfolio}/></section></main>
@@ -414,6 +442,17 @@ function AccountPage({ customerToken, customer, authName, setAuthName, authPhone
   });
   if (!customerToken) return <main className="container"><section className="panel"><h2>حساب العميلة</h2><p className="empty">سجلي الدخول برقم الجوال لعرض طلباتك وعناوينك المحفوظة.</p><form className="track" onSubmit={requestOtp}><input value={authName} onChange={e=>setAuthName(e.target.value)} placeholder="اسم العميلة للتسجيل أول مرة"/><input value={authPhone} onChange={e=>setAuthPhone(e.target.value)} placeholder="05xxxxxxxx"/><button className="primary">إرسال رمز التحقق</button></form><form className="track" onSubmit={verifyOtp}><input value={otp} onChange={e=>setOtp(e.target.value)} placeholder="رمز التحقق"/><button className="primary">دخول</button></form></section></main>;
   return <main className="container"><section className="panel"><h2>حساب العميلة</h2><p>مرحباً {customer?.name || customer?.phone}</p><button onClick={logoutCustomer}>تسجيل خروج</button></section><section className="panel"><h2>طلباتي</h2>{bookings.length ? bookings.map(b=><div className="bookingCard" key={b.id}><div><b>{b.booking_number || b.id}</b><span>{statusLabel(b.status)}</span></div><p>{b.service_name || '-'} • {fmtDate(b.booking_date)} {shortTime(b.booking_time)}</p><p>{b.region_name || '-'} / {b.city_name || '-'} / {b.district_name || '-'}</p></div>) : <p className="empty">لا توجد طلبات في الحساب.</p>}</section><section className="panel"><h2>العناوين المحفوظة</h2>{addresses.map(a=><div className="bookingCard" key={a.id}><b>{a.label}</b><p>{a.region_name||'-'} / {a.city_name||'-'} / {a.district_name||'-'}</p><p>{a.address}</p></div>)}<form className="bookingGrid" onSubmit={saveAddress}><Field label="اسم العنوان"><Input value={addressForm.label} onChange={v=>setAddressForm({...addressForm,label:v})}/></Field><Field label="المنطقة"><Select value={addressForm.region_id} onChange={v=>setAddressForm({...addressForm,region_id:v,city_id:'',district_id:''})}><OptionList items={regions}/></Select></Field><Field label="المدينة"><Select value={addressForm.city_id} onChange={v=>setAddressForm({...addressForm,city_id:v,district_id:''})}><OptionList items={filteredCities}/></Select></Field><Field label="الحي"><Select value={addressForm.district_id} onChange={v=>setAddressForm({...addressForm,district_id:v})}><OptionList items={filteredDistricts}/></Select></Field><Field label="العنوان التفصيلي"><Input required value={addressForm.address} onChange={v=>setAddressForm({...addressForm,address:v})}/></Field><button className="primary">حفظ العنوان</button></form></section></main>;
+}
+
+
+function SiteFooter({ setTab }) {
+  return <footer className="siteFooter">
+    <div><h4>About Us</h4><button onClick={() => setTab('home')}>About Beauty Home Service</button><button onClick={() => setTab('beauticians')}>Our Experts</button></div>
+    <div><h4>Contact Us</h4><button>Contact With Us</button><button>Support</button></div>
+    <div><h4>Services</h4><button onClick={() => setTab('booking')}>Request Booking</button><button onClick={() => setTab('track')}>Order Tracking</button></div>
+    <div><h4>Legal</h4><button>Terms</button><button>Privacy</button></div>
+    <p>© Beauty Home Service</p>
+  </footer>;
 }
 
 createRoot(document.getElementById('root')).render(<App />);
