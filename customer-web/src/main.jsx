@@ -87,6 +87,8 @@ function App() {
   const [customerToken, setCustomerToken] = useState(() => localStorage.getItem('beauty_customer_token') || '');
   const [customer, setCustomer] = useState(null);
   const [authPhone, setAuthPhone] = useState('');
+  const [authName, setAuthName] = useState('');
+  const [bookingMode, setBookingMode] = useState(() => localStorage.getItem('beauty_customer_token') ? 'account' : 'guest');
   const [otp, setOtp] = useState('');
   const [accountBookings, setAccountBookings] = useState([]);
   const [addresses, setAddresses] = useState([]);
@@ -98,6 +100,21 @@ function App() {
   useEffect(() => { loadServices(booking.service_category_id); }, [booking.service_category_id]);
   useEffect(() => { loadBeauticians(); loadPortfolio(); }, [booking.region_id, booking.city_id, booking.district_id, booking.service_id, booking.service_category_id]);
   useEffect(() => { if (customerToken) loadAccount(); }, [customerToken]);
+
+  useEffect(() => { if (customerToken && customer) applyCustomerToBooking(customer, addresses); }, [customerToken, customer, addresses]);
+
+  function applyCustomerToBooking(customerData, customerAddresses = []) {
+    const defaultAddress = (customerAddresses || []).find(a => a.is_default) || (customerAddresses || [])[0];
+    setBooking(b => ({
+      ...b,
+      customer_name: b.customer_name || customerData?.name || '',
+      phone: b.phone || customerData?.phone || '',
+      region_id: b.region_id || customerData?.region_id || defaultAddress?.region_id || '',
+      city_id: b.city_id || customerData?.city_id || defaultAddress?.city_id || '',
+      district_id: b.district_id || customerData?.district_id || defaultAddress?.district_id || '',
+      address: b.address || defaultAddress?.address || ''
+    }));
+  }
 
   async function init() {
     try {
@@ -168,10 +185,15 @@ function App() {
   async function submitBooking(e) {
     e.preventDefault(); setLoading(true); setMessage('');
     try {
-      const payload = { ...booking, customer_phone: booking.phone, phone: booking.phone, people_count: Number(booking.people_count || 1), booking_source: 'web' };
+      const payload = { ...booking, customer_phone: booking.phone, phone: booking.phone, people_count: Number(booking.people_count || 1), booking_source: 'web', booking_customer_mode: customerToken && bookingMode === 'account' ? 'account' : 'guest' };
       const created = await api('/bookings', { method: 'POST', body: JSON.stringify(payload) });
       setMessage(`تم إرسال الطلب بنجاح. رقم الطلب: ${created.booking_number || created.id}`);
-      setBooking(emptyBooking);
+      if (customerToken && bookingMode === 'account' && customer) {
+        const defaultAddress = (addresses || []).find(a => a.is_default) || (addresses || [])[0];
+        setBooking({ ...emptyBooking, customer_name: customer?.name || '', phone: customer?.phone || '', region_id: customer?.region_id || defaultAddress?.region_id || '', city_id: customer?.city_id || defaultAddress?.city_id || '', district_id: customer?.district_id || defaultAddress?.district_id || '', address: defaultAddress?.address || '' });
+      } else {
+        setBooking(emptyBooking);
+      }
       setTab('track');
       setTrackingPhone(payload.phone);
     } catch (e) { setMessage(`تعذر إرسال الطلب: ${e.message}`); }
@@ -196,8 +218,8 @@ function App() {
   async function requestOtp(e) {
     e?.preventDefault?.(); setLoading(true); setMessage('');
     try {
-      const r = await api('/customer/auth/request-otp', { method:'POST', body: JSON.stringify({ phone: authPhone }) });
-      setMessage(r.dev_otp ? `تم إنشاء رمز التحقق المحلي: ${r.dev_otp}` : 'تم إرسال رمز التحقق إلى جوالك.');
+      const r = await api('/customer/auth/request-otp', { method:'POST', body: JSON.stringify({ phone: authPhone, name: authName }) });
+      setMessage(`تم إرسال رمز التحقق. رمز التجربة: ${r.dev_otp || 'تم الإرسال'}`);
     } catch(e) { setMessage(`تعذر إرسال رمز التحقق: ${e.message}`); }
     finally { setLoading(false); }
   }
@@ -220,7 +242,7 @@ function App() {
       const [me, myBookings, myAddresses] = await Promise.all([
         api('/customer/me', { headers }), api('/customer/my-bookings', { headers }), api('/customer/addresses', { headers })
       ]);
-      setCustomer(me); setAccountBookings(myBookings || []); setAddresses(myAddresses || []);
+      setCustomer(me); setAuthPhone(me?.phone || ''); setAuthName(me?.name || ''); setAccountBookings(myBookings || []); setAddresses(myAddresses || []); applyCustomerToBooking(me, myAddresses || []);
     } catch(e) { setMessage(`تعذر تحميل الحساب: ${e.message}`); }
   }
 
@@ -233,7 +255,7 @@ function App() {
     finally { setLoading(false); }
   }
 
-  function logoutCustomer() { localStorage.removeItem('beauty_customer_token'); setCustomerToken(''); setCustomer(null); setAccountBookings([]); setAddresses([]); }
+  function logoutCustomer() { localStorage.removeItem('beauty_customer_token'); setCustomerToken(''); setCustomer(null); setAccountBookings([]); setAddresses([]); setBookingMode('guest'); }
 
   const bookingCities = useMemo(() => cities.filter(c => !booking.region_id || c.region_id === booking.region_id), [cities, booking.region_id]);
   const bookingDistricts = useMemo(() => districts.filter(d => {
@@ -260,18 +282,66 @@ function App() {
       <section className="heroText"><span>خدمات تجميل منزلية</span><h1>احجزي خدمتك بسهولة وشاهدي أعمال الخبيرات قبل الاختيار</h1><p>واجهة عميلة تعمل على الكمبيوتر والمتصفح وترتبط مباشرة بالسيرفر السحابي.</p><button className="primary" onClick={() => setTab('booking')}>ابدئي طلب حجز</button></section>
     </header>
 
+    <CustomerAccessStrip
+      customerToken={customerToken}
+      customer={customer}
+      bookingMode={bookingMode}
+      setBookingMode={setBookingMode}
+      setTab={setTab}
+      authName={authName}
+      setAuthName={setAuthName}
+      authPhone={authPhone}
+      setAuthPhone={setAuthPhone}
+      otp={otp}
+      setOtp={setOtp}
+      requestOtp={requestOtp}
+      verifyOtp={verifyOtp}
+      logoutCustomer={logoutCustomer}
+    />
+
     {message && <div className="message">{message}</div>}
     {loading && <div className="loading">جاري التحميل...</div>}
 
     {tab === 'home' && <Home categories={categories} portfolio={portfolio} beauticians={beauticians} setTab={setTab} openBeautician={openBeautician} />}
-    {tab === 'booking' && <BookingForm booking={booking} setBookingField={setBookingField} regions={regions} cities={bookingCities} districts={bookingDistricts} categories={categories} services={bookingServices} beauticians={beauticians} portfolio={portfolio} uploadImage={uploadImage} submitBooking={submitBooking} openBeautician={openBeautician} />}
+    {tab === 'booking' && <BookingForm booking={booking} setBookingField={setBookingField} regions={regions} cities={bookingCities} districts={bookingDistricts} categories={categories} services={bookingServices} beauticians={beauticians} portfolio={portfolio} uploadImage={uploadImage} submitBooking={submitBooking} openBeautician={openBeautician} customerToken={customerToken} customer={customer} bookingMode={bookingMode} setBookingMode={setBookingMode} authName={authName} setAuthName={setAuthName} authPhone={authPhone} setAuthPhone={setAuthPhone} otp={otp} setOtp={setOtp} requestOtp={requestOtp} verifyOtp={verifyOtp} />}
     {tab === 'beauticians' && <BeauticiansPage beauticians={beauticians} portfolio={portfolio} openBeautician={openBeautician} />}
     {tab === 'beautician' && <BeauticianDetails data={selectedBeautician} choose={(id) => { setBookingField('preferred_artist_id', id); setTab('booking'); }} />}
     {tab === 'track' && <TrackPage phone={trackingPhone} setPhone={setTrackingPhone} results={trackingResults} submit={trackBookings} />}
-    {tab === 'account' && <AccountPage customerToken={customerToken} customer={customer} authPhone={authPhone} setAuthPhone={setAuthPhone} otp={otp} setOtp={setOtp} requestOtp={requestOtp} verifyOtp={verifyOtp} logoutCustomer={logoutCustomer} bookings={accountBookings} addresses={addresses} addressForm={addressForm} setAddressForm={setAddressForm} saveAddress={saveAddress} regions={regions} cities={cities} districts={districts} />}
+    {tab === 'account' && <AccountPage customerToken={customerToken} customer={customer} authName={authName} setAuthName={setAuthName} authPhone={authPhone} setAuthPhone={setAuthPhone} otp={otp} setOtp={setOtp} requestOtp={requestOtp} verifyOtp={verifyOtp} logoutCustomer={logoutCustomer} bookings={accountBookings} addresses={addresses} addressForm={addressForm} setAddressForm={setAddressForm} saveAddress={saveAddress} regions={regions} cities={cities} districts={districts} />}
 
     <footer>Beauty Home Service © بوابة العميلة</footer>
   </div>;
+}
+
+
+function CustomerAccessStrip({ customerToken, customer, bookingMode, setBookingMode, setTab, authName, setAuthName, authPhone, setAuthPhone, otp, setOtp, requestOtp, verifyOtp, logoutCustomer }) {
+  const isLoggedIn = Boolean(customerToken && customer);
+  return <section className="customerAccess">
+    <div className="customerAccessHead">
+      <div>
+        <span className="eyebrow">دخول العميلة</span>
+        <h2>احجزي بحسابك أو تابعي كضيفة</h2>
+        <p>عند الدخول برقم الجوال يتم تعبئة الاسم ورقم الجوال والعنوان المحفوظ تلقائياً داخل الطلب.</p>
+      </div>
+      <div className="accessActions">
+        <button type="button" className={bookingMode === 'account' ? 'mode active' : 'mode'} onClick={() => { setBookingMode('account'); setTab('booking'); }}>تسجيل / دخول برقم الهاتف</button>
+        <button type="button" className={bookingMode === 'guest' ? 'mode active' : 'mode'} onClick={() => { setBookingMode('guest'); setTab('booking'); }}>المتابعة كضيف</button>
+      </div>
+    </div>
+
+    {isLoggedIn ? <div className="signedInBox">
+      <div><b>تم الدخول:</b> {customer?.name || customer?.phone}</div>
+      <div className="signedInActions"><button type="button" onClick={() => setTab('account')}>عرض حسابي وطلباتي</button><button type="button" onClick={logoutCustomer}>تسجيل خروج</button></div>
+    </div> : <form className="quickLogin" onSubmit={verifyOtp}>
+      <Input value={authName} onChange={setAuthName} placeholder="اسم العميلة للتسجيل أول مرة" />
+      <Input value={authPhone} onChange={setAuthPhone} placeholder="رقم الجوال 05xxxxxxxx" />
+      <button type="button" onClick={requestOtp}>إرسال رمز التحقق</button>
+      <Input value={otp} onChange={setOtp} placeholder="رمز التحقق" />
+      <button className="primary" type="submit">دخول الحساب</button>
+      <button type="button" className="guestBtn" onClick={() => { setBookingMode('guest'); setTab('booking'); }}>حجز كضيف</button>
+      <small>رمز الاختبار المحلي: 1234. في الإنتاج يتم إرسال الرمز عبر مزود الرسائل عند تفعيله.</small>
+    </form>}
+  </section>;
 }
 
 function Home({ categories, portfolio, beauticians, setTab, openBeautician }) {
@@ -283,11 +353,13 @@ function Home({ categories, portfolio, beauticians, setTab, openBeautician }) {
   </main>
 }
 function Card({ icon, title, value }) { return <div className="stat">{icon}<strong>{value}</strong><span>{title}</span></div> }
-function BookingForm({ booking, setBookingField, regions, cities, districts, categories, services, beauticians, portfolio, uploadImage, submitBooking, openBeautician }) {
+function BookingForm({ booking, setBookingField, regions, cities, districts, categories, services, beauticians, portfolio, uploadImage, submitBooking, openBeautician, customerToken, customer, bookingMode, setBookingMode, authName, setAuthName, authPhone, setAuthPhone, otp, setOtp, requestOtp, verifyOtp }) {
   const selectedService = services.find(s => s.id === booking.service_id);
-  return <main className="container"><section className="panel"><h2>طلب حجز</h2><form className="bookingGrid" onSubmit={submitBooking}>
-    <Field label="اسم العميلة"><Input required value={booking.customer_name} onChange={v=>setBookingField('customer_name',v)} placeholder="الاسم" /></Field>
-    <Field label="رقم الجوال"><Input required value={booking.phone} onChange={v=>setBookingField('phone',v)} placeholder="05xxxxxxxx" /></Field>
+  const usingAccount = bookingMode === 'account' && customerToken && customer;
+  const needAccountLogin = bookingMode === 'account' && !customerToken;
+  return <main className="container"><section className="panel"><h2>طريقة الحجز</h2><div className="modeCards"><button type="button" className={bookingMode === 'account' ? 'mode active' : 'mode'} onClick={()=>setBookingMode('account')}>تسجيل / دخول برقم الهاتف</button><button type="button" className={bookingMode === 'guest' ? 'mode active' : 'mode'} onClick={()=>setBookingMode('guest')}>المتابعة كضيف</button></div>{usingAccount && <div className="accountNotice">تم الدخول كـ <b>{customer?.name || customer?.phone}</b>. سيتم تعبئة الاسم ورقم الجوال والعنوان الافتراضي تلقائياً إن وجد.</div>}{needAccountLogin && <form className="inlineAuth" onSubmit={verifyOtp}><Input value={authName} onChange={setAuthName} placeholder="اسم العميلة للتسجيل أول مرة"/><Input value={authPhone} onChange={setAuthPhone} placeholder="05xxxxxxxx"/><button type="button" onClick={requestOtp}>إرسال الرمز</button><Input value={otp} onChange={setOtp} placeholder="رمز التحقق"/><button className="primary">دخول</button><small>يمكنك أيضاً اختيار المتابعة كضيف وإدخال البيانات داخل الطلب.</small></form>}</section><section className="panel"><h2>طلب حجز</h2><form className="bookingGrid" onSubmit={submitBooking}>
+    <Field label="اسم العميلة"><Input required disabled={usingAccount} value={booking.customer_name} onChange={v=>setBookingField('customer_name',v)} placeholder={usingAccount ? 'من بيانات الحساب' : 'الاسم'} /></Field>
+    <Field label="رقم الجوال"><Input required disabled={usingAccount} value={booking.phone} onChange={v=>setBookingField('phone',v)} placeholder={usingAccount ? 'من بيانات الحساب' : '05xxxxxxxx'} /></Field>
     <Field label="المنطقة"><Select value={booking.region_id} onChange={v=>setBookingField('region_id',v)}><OptionList items={regions} empty="كل المناطق / اختاري المنطقة" /></Select></Field>
     <Field label="المدينة"><Select value={booking.city_id} onChange={v=>setBookingField('city_id',v)}><OptionList items={cities} empty="كل المدن / اختاري المدينة" /></Select></Field>
     <Field label="الحي"><Select value={booking.district_id} onChange={v=>setBookingField('district_id',v)}><OptionList items={districts} empty="اختاري الحي" /></Select></Field>
@@ -304,7 +376,7 @@ function BookingForm({ booking, setBookingField, regions, cities, districts, cat
     <Field label="صورة التصميم"><input type="file" accept="image/*" onChange={e=>uploadImage(e.target.files?.[0])}/>{booking.design_image_url && <small>تم إرفاق الصورة</small>}</Field>
     <Field label="ملاحظات"><TextArea value={booking.customer_notes} onChange={v=>setBookingField('customer_notes',v)} placeholder="أي تفاصيل إضافية" /></Field>
     <div className="summary"><b>{selectedService ? label(selectedService) : 'الخدمة'}</b><span>{selectedService ? [money(selectedService.min_price), money(selectedService.max_price)].filter(Boolean).join(' - ') : 'اختاري الخدمة لمعرفة التفاصيل'}</span></div>
-    <button className="primary submit" type="submit">إرسال الطلب</button>
+    <button className="primary submit" type="submit" disabled={needAccountLogin}>إرسال الطلب</button>
   </form></section>
   <section className="panel"><h2>نماذج مرتبطة بالخدمة</h2><PortfolioGrid items={portfolio.slice(0,8)} /></section>
   <section className="panel"><h2>خبيرات مناسبات</h2><BeauticianGrid items={beauticians.slice(0,8)} openBeautician={openBeautician} /></section></main>
@@ -330,7 +402,7 @@ function TrackPage({ phone, setPhone, results, submit }) {
 }
 
 
-function AccountPage({ customerToken, customer, authPhone, setAuthPhone, otp, setOtp, requestOtp, verifyOtp, logoutCustomer, bookings, addresses, addressForm, setAddressForm, saveAddress, regions, cities, districts }) {
+function AccountPage({ customerToken, customer, authName, setAuthName, authPhone, setAuthPhone, otp, setOtp, requestOtp, verifyOtp, logoutCustomer, bookings, addresses, addressForm, setAddressForm, saveAddress, regions, cities, districts }) {
   const filteredCities = cities.filter(c => !addressForm.region_id || c.region_id === addressForm.region_id);
   const filteredDistricts = districts.filter(d => {
     if (addressForm.city_id) return d.city_id === addressForm.city_id;
@@ -340,7 +412,7 @@ function AccountPage({ customerToken, customer, authPhone, setAuthPhone, otp, se
     }
     return true;
   });
-  if (!customerToken) return <main className="container"><section className="panel"><h2>حساب العميلة</h2><p className="empty">سجلي الدخول برقم الجوال لعرض طلباتك وعناوينك المحفوظة.</p><form className="track" onSubmit={requestOtp}><input value={authPhone} onChange={e=>setAuthPhone(e.target.value)} placeholder="05xxxxxxxx"/><button className="primary">إرسال رمز التحقق</button></form><form className="track" onSubmit={verifyOtp}><input value={otp} onChange={e=>setOtp(e.target.value)} placeholder="رمز التحقق"/><button className="primary">دخول</button></form></section></main>;
+  if (!customerToken) return <main className="container"><section className="panel"><h2>حساب العميلة</h2><p className="empty">سجلي الدخول برقم الجوال لعرض طلباتك وعناوينك المحفوظة.</p><form className="track" onSubmit={requestOtp}><input value={authName} onChange={e=>setAuthName(e.target.value)} placeholder="اسم العميلة للتسجيل أول مرة"/><input value={authPhone} onChange={e=>setAuthPhone(e.target.value)} placeholder="05xxxxxxxx"/><button className="primary">إرسال رمز التحقق</button></form><form className="track" onSubmit={verifyOtp}><input value={otp} onChange={e=>setOtp(e.target.value)} placeholder="رمز التحقق"/><button className="primary">دخول</button></form></section></main>;
   return <main className="container"><section className="panel"><h2>حساب العميلة</h2><p>مرحباً {customer?.name || customer?.phone}</p><button onClick={logoutCustomer}>تسجيل خروج</button></section><section className="panel"><h2>طلباتي</h2>{bookings.length ? bookings.map(b=><div className="bookingCard" key={b.id}><div><b>{b.booking_number || b.id}</b><span>{statusLabel(b.status)}</span></div><p>{b.service_name || '-'} • {fmtDate(b.booking_date)} {shortTime(b.booking_time)}</p><p>{b.region_name || '-'} / {b.city_name || '-'} / {b.district_name || '-'}</p></div>) : <p className="empty">لا توجد طلبات في الحساب.</p>}</section><section className="panel"><h2>العناوين المحفوظة</h2>{addresses.map(a=><div className="bookingCard" key={a.id}><b>{a.label}</b><p>{a.region_name||'-'} / {a.city_name||'-'} / {a.district_name||'-'}</p><p>{a.address}</p></div>)}<form className="bookingGrid" onSubmit={saveAddress}><Field label="اسم العنوان"><Input value={addressForm.label} onChange={v=>setAddressForm({...addressForm,label:v})}/></Field><Field label="المنطقة"><Select value={addressForm.region_id} onChange={v=>setAddressForm({...addressForm,region_id:v,city_id:'',district_id:''})}><OptionList items={regions}/></Select></Field><Field label="المدينة"><Select value={addressForm.city_id} onChange={v=>setAddressForm({...addressForm,city_id:v,district_id:''})}><OptionList items={filteredCities}/></Select></Field><Field label="الحي"><Select value={addressForm.district_id} onChange={v=>setAddressForm({...addressForm,district_id:v})}><OptionList items={filteredDistricts}/></Select></Field><Field label="العنوان التفصيلي"><Input required value={addressForm.address} onChange={v=>setAddressForm({...addressForm,address:v})}/></Field><button className="primary">حفظ العنوان</button></form></section></main>;
 }
 
