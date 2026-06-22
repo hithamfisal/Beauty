@@ -749,6 +749,23 @@ app.get(['/api/health', '/health'], (req, res) => {
   res.json({ ok: true, app: 'Beauty Home Service API', version: 'v2.3' });
 });
 
+app.get('/api/debug/admin-env', (req, res) => {
+  const email = process.env.ADMIN_EMAIL || '';
+  const password = process.env.ADMIN_PASSWORD || '';
+
+  res.json({
+    nodeEnv: process.env.NODE_ENV || null,
+    adminEmail: email,
+    adminEmailLength: email.length,
+    adminPasswordLength: password.length,
+    adminPasswordFirstChar: password ? password[0] : null,
+    adminPasswordLastChar: password ? password[password.length - 1] : null,
+    hasJwtSecret: Boolean(process.env.JWT_SECRET),
+    hasDatabaseUrl: Boolean(process.env.DATABASE_URL),
+    corsAllowedOrigins: process.env.CORS_ALLOWED_ORIGINS || null
+  });
+});
+
 app.get('/api/regions', async (req, res) => {
   const result = await query(`SELECT * FROM regions WHERE status='active' ORDER BY sort_order, name_ar`);
   res.json(result.rows);

@@ -1,0 +1,36 @@
+cd "D:\Dashboards Projects\Beauty\Beauty V1"
+
+# 1) ضع رابط Neon الحقيقي هنا
+$NEON_DATABASE_URL = "postgresql://neondb_owner:npg_WuVzdsP3m7CH@ep-cool-star-adyf5hra.c-2.us-east-1.aws.neon.tech/neondb?sslmode=require"
+
+# 2) أخذ نسخة احتياطية من قاعدة Neon قبل الاستبدال
+& "C:\Program Files\PostgreSQL\18\bin\pg_dump.exe" `
+  "$NEON_DATABASE_URL" `
+  --clean `
+  --if-exists `
+  --no-owner `
+  --no-privileges `
+  -f "D:\beauty_neon_backup_before_sync.sql"
+
+# 3) أخذ نسخة من قاعدة الكمبيوتر المحلية
+& "C:\Program Files\PostgreSQL\18\bin\pg_dump.exe" `
+  -U postgres `
+  -d henna_booking `
+  --clean `
+  --if-exists `
+  --no-owner `
+  --no-privileges `
+  -f "D:\beauty_local_to_neon.sql"
+
+# 4) رفع نسخة الكمبيوتر إلى Neon
+& "C:\Program Files\PostgreSQL\18\bin\psql.exe" `
+  "$NEON_DATABASE_URL" `
+  -f "D:\beauty_local_to_neon.sql"
+
+# 5) فحص الجداول الأساسية على Neon بعد المزامنة
+& "C:\Program Files\PostgreSQL\18\bin\psql.exe" "$NEON_DATABASE_URL" -c "SELECT COUNT(*) AS regions FROM regions;"
+& "C:\Program Files\PostgreSQL\18\bin\psql.exe" "$NEON_DATABASE_URL" -c "SELECT COUNT(*) AS cities FROM cities;"
+& "C:\Program Files\PostgreSQL\18\bin\psql.exe" "$NEON_DATABASE_URL" -c "SELECT COUNT(*) AS districts FROM districts;"
+& "C:\Program Files\PostgreSQL\18\bin\psql.exe" "$NEON_DATABASE_URL" -c "SELECT COUNT(*) AS bookings FROM bookings;"
+& "C:\Program Files\PostgreSQL\18\bin\psql.exe" "$NEON_DATABASE_URL" -c "SELECT COUNT(*) AS beauticians FROM artists;"
+& "C:\Program Files\PostgreSQL\18\bin\psql.exe" "$NEON_DATABASE_URL" -c "SELECT COUNT(*) AS services FROM services;"
