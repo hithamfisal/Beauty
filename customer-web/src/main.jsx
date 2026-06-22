@@ -24,6 +24,7 @@ const emptyBooking = {
 };
 
 function label(item) { return item?.name_ar || item?.display_name || item?.name || item?.title_ar || item?.name_en || '-'; }
+function sameId(a, b) { return String(a || '') === String(b || ''); }
 function money(v) { return v == null || v === '' ? '' : `${Number(v).toLocaleString('ar-SA')} ر.س`; }
 function fmtDate(v) { try { return v ? new Date(v).toLocaleDateString('ar-SA') : '-'; } catch { return v || '-'; } }
 function shortTime(v) { return v ? String(v).slice(0, 5) : '-'; }
@@ -172,16 +173,28 @@ function App() {
       await Promise.all([loadCities(''), loadDistricts(''), loadServices(''), loadBeauticians()]);
     } catch (e) { setMessage(`تعذر تحميل البيانات: ${e.message}`); }
   }
-  async function loadCities() {
-    try { const r = await api('/cities'); setCities(r || []); }
+  async function loadCities(regionId = booking.region_id) {
+    try {
+      const r = await api(regionId ? `/cities?region_id=${encodeURIComponent(regionId)}` : '/cities');
+      setCities(r || []);
+    }
     catch (e) { setMessage(`تعذر تحميل المدن: ${e.message}`); }
   }
-  async function loadDistricts() {
-    try { const r = await api('/districts'); setDistricts(r || []); }
+  async function loadDistricts(cityId = booking.city_id, regionId = booking.region_id) {
+    try {
+      const path = cityId
+        ? `/districts?city_id=${encodeURIComponent(cityId)}`
+        : (regionId ? `/districts?region_id=${encodeURIComponent(regionId)}` : '/districts');
+      const r = await api(path);
+      setDistricts(r || []);
+    }
     catch (e) { setMessage(`تعذر تحميل الأحياء: ${e.message}`); }
   }
-  async function loadServices() {
-    try { const r = await api('/services'); setServices(r || []); }
+  async function loadServices(categoryId = booking.service_category_id) {
+    try {
+      const r = await api(categoryId ? `/services?category_id=${encodeURIComponent(categoryId)}` : '/services');
+      setServices(r || []);
+    }
     catch (e) { setMessage(`تعذر تحميل الخدمات: ${e.message}`); }
   }
   async function loadBeauticians() {
@@ -191,6 +204,7 @@ function App() {
       if (booking.city_id) qs.set('city_id', booking.city_id);
       if (booking.district_id) qs.set('district_id', booking.district_id);
       if (booking.service_id) qs.set('service_id', booking.service_id);
+      else if (booking.service_category_id) qs.set('category_id', booking.service_category_id);
       let r = await api(`/beauticians${qs.toString() ? `?${qs}` : ''}`);
       // لا نترك قائمة اختيار الخبيرة فارغة: إذا لم توجد مطابقة دقيقة نعرض كل الخبيرات المتاحات مع بقاء خيار الدعم.
       if ((!r || !r.length) && qs.toString()) r = await api('/beauticians');
@@ -316,16 +330,16 @@ function App() {
 
   function logoutCustomer() { localStorage.removeItem('beauty_customer_token'); setCustomerToken(''); setCustomer(null); setAccountBookings([]); setAddresses([]); setBookingMode('guest'); }
 
-  const bookingCities = useMemo(() => cities.filter(c => !booking.region_id || c.region_id === booking.region_id), [cities, booking.region_id]);
+  const bookingCities = useMemo(() => cities.filter(c => !booking.region_id || sameId(c.region_id, booking.region_id)), [cities, booking.region_id]);
   const bookingDistricts = useMemo(() => districts.filter(d => {
-    if (booking.city_id) return d.city_id === booking.city_id;
+    if (booking.city_id) return sameId(d.city_id, booking.city_id);
     if (booking.region_id) {
       const city = cities.find(c => String(c.id) === String(d.city_id));
-      return city && String(city.region_id) === String(booking.region_id);
+      return city && sameId(city.region_id, booking.region_id);
     }
     return true;
   }), [districts, cities, booking.city_id, booking.region_id]);
-  const bookingServices = useMemo(() => services.filter(s => !booking.service_category_id || s.category_id === booking.service_category_id), [services, booking.service_category_id]);
+  const bookingServices = useMemo(() => services.filter(s => !booking.service_category_id || sameId(s.category_id, booking.service_category_id)), [services, booking.service_category_id]);
 
   const navItems = [
     { id: 'home', label: 'Home', ar: 'الرئيسية', icon: <HomeIcon size={22}/> },
@@ -448,10 +462,10 @@ function BookingForm({ booking, setBookingField, regions, cities, districts, cat
     <Field label="اسم العميلة"><Input required disabled={usingAccount} value={booking.customer_name} onChange={v=>setBookingField('customer_name',v)} placeholder={usingAccount ? 'من بيانات الحساب' : 'الاسم'} /></Field>
     <Field label="رقم الجوال"><PhoneInput required disabled={usingAccount} value={booking.phone} onChange={v=>setBookingField('phone',v)} placeholder={usingAccount ? 'من بيانات الحساب' : PHONE_PLACEHOLDER} /></Field>
     <Field label="المنطقة"><Select value={booking.region_id} onChange={v=>setBookingField('region_id',v)}><OptionList items={regions} empty="كل المناطق / اختاري المنطقة" /></Select></Field>
-    <Field label="المدينة"><Select value={booking.city_id} onChange={v=>setBookingField('city_id',v)}><OptionList items={cities} empty="كل المدن / اختاري المدينة" /></Select></Field>
-    <Field label="الحي"><Select value={booking.district_id} onChange={v=>setBookingField('district_id',v)}><OptionList items={districts} empty="اختاري الحي" /></Select></Field>
+    <Field label="المدينة"><Select value={booking.city_id} onChange={v=>setBookingField('city_id',v)}><OptionList items={cities} empty={booking.region_id ? "مدن المنطقة المختارة" : "كل المدن / اختاري المدينة"} /></Select></Field>
+    <Field label="الحي"><Select value={booking.district_id} onChange={v=>setBookingField('district_id',v)}><OptionList items={districts} empty={booking.city_id ? "أحياء المدينة المختارة" : booking.region_id ? "أحياء المنطقة المختارة" : "كل الأحياء / اختاري الحي"} /></Select></Field>
     <Field label="قسم الخدمة"><Select value={booking.service_category_id} onChange={v=>setBookingField('service_category_id',v)}><OptionList items={categories} empty="كل الأقسام" /></Select></Field>
-    <Field label="الخدمة"><Select required value={booking.service_id} onChange={v=>setBookingField('service_id',v)}><OptionList items={services} empty="كل الخدمات / اختاري الخدمة" /></Select></Field>
+    <Field label="الخدمة"><Select required value={booking.service_id} onChange={v=>setBookingField('service_id',v)}><OptionList items={services} empty={booking.service_category_id ? "خدمات القسم المختار" : "كل الخدمات / اختاري الخدمة"} /></Select></Field>
     <Field label="نوع المناسبة"><Input value={booking.event_type} onChange={v=>setBookingField('event_type',v)} /></Field>
     <Field label="التاريخ"><Input required type="date" value={booking.booking_date} onChange={v=>setBookingField('booking_date',v)} /></Field>
     <Field label="الوقت"><Input required type="time" value={booking.booking_time} onChange={v=>setBookingField('booking_time',v)} /></Field>
@@ -490,12 +504,12 @@ function TrackPage({ phone, setPhone, results, submit }) {
 
 
 function AccountPage({ customerToken, customer, authName, setAuthName, authPhone, setAuthPhone, otp, setOtp, requestOtp, verifyOtp, logoutCustomer, bookings, addresses, addressForm, setAddressForm, saveAddress, regions, cities, districts }) {
-  const filteredCities = cities.filter(c => !addressForm.region_id || c.region_id === addressForm.region_id);
+  const filteredCities = cities.filter(c => !addressForm.region_id || sameId(c.region_id, addressForm.region_id));
   const filteredDistricts = districts.filter(d => {
-    if (addressForm.city_id) return d.city_id === addressForm.city_id;
+    if (addressForm.city_id) return sameId(d.city_id, addressForm.city_id);
     if (addressForm.region_id) {
       const city = cities.find(c => String(c.id) === String(d.city_id));
-      return city && String(city.region_id) === String(addressForm.region_id);
+      return city && sameId(city.region_id, addressForm.region_id);
     }
     return true;
   });

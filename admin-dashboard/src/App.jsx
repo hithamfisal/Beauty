@@ -364,6 +364,8 @@ function Select({
     </select>
   );
 }
+function sameId(a, b) { return String(a || "") === String(b || ""); }
+
 function OptionList({ items, label = "name_ar", empty = "اختر" }) {
   const list = Array.isArray(items) ? items : [];
   return (
@@ -658,31 +660,31 @@ function App() {
     ? catalog.services
     : [];
   const citiesForBooking = catalogCities.filter(
-    (c) => !bookingForm.region_id || c.region_id === bookingForm.region_id,
+    (c) => !bookingForm.region_id || sameId(c.region_id, bookingForm.region_id),
   );
   const districtsForBooking = catalogDistricts.filter((d) => {
-    if (bookingForm.city_id) return d.city_id === bookingForm.city_id;
+    if (bookingForm.city_id) return sameId(d.city_id, bookingForm.city_id);
     if (bookingForm.region_id) {
       const city = catalogCities.find(
         (c) => String(c.id) === String(d.city_id),
       );
-      return city && String(city.region_id) === String(bookingForm.region_id);
+      return city && sameId(city.region_id, bookingForm.region_id);
     }
     return true;
   });
   const servicesForBooking = catalogServices.filter(
     (s) =>
       !bookingForm.service_category_id ||
-      s.category_id === bookingForm.service_category_id,
+      sameId(s.category_id, bookingForm.service_category_id),
   );
   const citiesForBeautician = catalogCities.filter(
     (c) =>
-      !beauticianForm.region_id || c.region_id === beauticianForm.region_id,
+      !beauticianForm.region_id || sameId(c.region_id, beauticianForm.region_id),
   );
   const portfolioServices = catalogServices.filter(
     (s) =>
       !portfolioForm.service_category_id ||
-      s.category_id === portfolioForm.service_category_id,
+      sameId(s.category_id, portfolioForm.service_category_id),
   );
   const serviceCategories = useMemo(
     () =>
@@ -741,9 +743,9 @@ function App() {
           (b.payment_status || "unpaid") !== filters.payment
         )
           return false;
-        if (filters.region_id && b.region_id !== filters.region_id)
+        if (filters.region_id && !sameId(b.region_id, filters.region_id))
           return false;
-        if (filters.city_id && b.city_id !== filters.city_id) return false;
+        if (filters.city_id && !sameId(b.city_id, filters.city_id)) return false;
         if (
           filters.beautician_id &&
           b.assigned_artist_id !== filters.beautician_id &&
@@ -1366,7 +1368,7 @@ function App() {
                   value={bookingForm.city_id}
                   onChange={(v) => setBooking("city_id", v)}
                 >
-                  <OptionList items={citiesForBooking} />
+                  <OptionList items={citiesForBooking} empty={bookingForm.region_id ? "مدن المنطقة المختارة" : "كل المدن"} />
                 </Select>
               </Field>
               <Field label="الحي">
@@ -1375,7 +1377,7 @@ function App() {
                   value={bookingForm.district_id}
                   onChange={(v) => setBooking("district_id", v)}
                 >
-                  <OptionList items={districtsForBooking} />
+                  <OptionList items={districtsForBooking} empty={bookingForm.city_id ? "أحياء المدينة المختارة" : bookingForm.region_id ? "أحياء المنطقة المختارة" : "كل الأحياء"} />
                 </Select>
               </Field>
               <Field label="قسم الخدمة">
@@ -1395,7 +1397,7 @@ function App() {
                   <OptionList
                     items={servicesForBooking}
                     label="display_name"
-                    empty="كل الخدمات / اختر الخدمة"
+                    empty={bookingForm.service_category_id ? "خدمات القسم المختار" : "كل الخدمات / اختر الخدمة"}
                   />
                 </Select>
               </Field>
@@ -2075,7 +2077,7 @@ function App() {
                 <OptionList
                   items={catalogCities.filter(
                     (c) =>
-                      !filters.region_id || c.region_id === filters.region_id,
+                      !filters.region_id || sameId(c.region_id, filters.region_id),
                   )}
                   empty="كل المدن"
                 />
@@ -2974,14 +2976,19 @@ function CatalogPanel({ catalog, api, load, setMessage }) {
   const [selectedRegionId, setSelectedRegionId] = useState("");
   const [selectedCityId, setSelectedCityId] = useState("");
   const visibleCities = catalogCities.filter(
-    (c) => !selectedRegionId || c.region_id === selectedRegionId,
+    (c) => !selectedRegionId || sameId(c.region_id, selectedRegionId),
   );
   const cityOptionsForDistrict = catalogCities.filter(
-    (c) => !selectedRegionId || c.region_id === selectedRegionId,
+    (c) => !selectedRegionId || sameId(c.region_id, selectedRegionId),
   );
-  const visibleDistricts = catalogDistricts.filter(
-    (d) => !selectedCityId || d.city_id === selectedCityId,
-  );
+  const visibleDistricts = catalogDistricts.filter((d) => {
+    if (selectedCityId) return sameId(d.city_id, selectedCityId);
+    if (selectedRegionId) {
+      const city = catalogCities.find((c) => sameId(c.id, d.city_id));
+      return city && sameId(city.region_id, selectedRegionId);
+    }
+    return true;
+  });
   async function save(path, form, reset) {
     try {
       const id = edit[path];
@@ -3108,6 +3115,7 @@ function CatalogPanel({ catalog, api, load, setMessage }) {
               onChange={(v) => {
                 setSelectedRegionId(v);
                 setSelectedCityId("");
+                setDistrict((prev) => ({ ...prev, city_id: "" }));
               }}
             >
               <OptionList items={catalogRegions} empty="كل المناطق" />
@@ -3183,7 +3191,7 @@ function ServicesPanel({ catalog, api, refreshServiceCatalog, setMessage }) {
   const visibleServices = catalogServices.filter(
     (s) =>
       !selectedCategoryId ||
-      String(s.category_id) === String(selectedCategoryId),
+      sameId(s.category_id, selectedCategoryId),
   );
   async function save(path, form, reset) {
     try {

@@ -13,6 +13,8 @@ dotenv.config();
 const app = express();
 const PORT = process.env.PORT || 4000;
 const IS_PRODUCTION = process.env.NODE_ENV === 'production';
+const CUSTOMER_OTP_DEV_MODE = String(process.env.CUSTOMER_OTP_DEV_MODE || '').toLowerCase() === 'true';
+const CUSTOMER_OTP_TEST_MODE = !IS_PRODUCTION || CUSTOMER_OTP_DEV_MODE;
 const JWT_SECRET = process.env.JWT_SECRET || (IS_PRODUCTION ? '' : 'beauty-home-service-local-secret');
 const DEFAULT_ADMIN_EMAIL = process.env.ADMIN_EMAIL || 'admin@beauty.local';
 const DEFAULT_ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'Beauty@12345';
@@ -2044,7 +2046,7 @@ app.get('/api/customer/bookings/:id', async (req, res) => {
 
 
 async function deliverCustomerOtp(phone, otp) {
-  if (!IS_PRODUCTION) return;
+  if (CUSTOMER_OTP_TEST_MODE) return;
   const url = process.env.SMS_API_URL;
   const token = process.env.SMS_API_TOKEN;
   if (!url || !token) throw new Error('SMS provider is not configured');
@@ -2056,9 +2058,9 @@ async function deliverCustomerOtp(phone, otp) {
   if (!response.ok) throw new Error(`SMS provider rejected the request (${response.status})`);
 }
 
-export function buildOtpResponse(otp, production = IS_PRODUCTION) {
+export function buildOtpResponse(otp, exposeOtp = CUSTOMER_OTP_TEST_MODE) {
   const response = { ok: true, message: 'تم إرسال رمز التحقق.' };
-  if (!production) response.dev_otp = otp;
+  if (exposeOtp) response.dev_otp = otp;
   return response;
 }
 
@@ -2074,7 +2076,7 @@ async function requestCustomerOtp(req, res) {
     } else if (name) {
       customer = await query(`UPDATE customers SET name=COALESCE($1,name), updated_at=NOW() WHERE id=$2 RETURNING *`, [name, customer.rows[0].id]);
     }
-    const otp = IS_PRODUCTION ? String(randomInt(100000, 1000000)) : '1234';
+    const otp = CUSTOMER_OTP_TEST_MODE ? '1234' : String(randomInt(100000, 1000000));
     const otpHash = await bcrypt.hash(otp, 10);
     await deliverCustomerOtp(phone, otp);
     await query(`UPDATE customer_otp_codes SET used_at=NOW() WHERE phone=$1 AND used_at IS NULL`, [phone]);
@@ -2082,7 +2084,7 @@ async function requestCustomerOtp(req, res) {
     res.json(buildOtpResponse(otp));
   } catch (error) {
     if (validationResponse(error, res)) return;
-    const message = IS_PRODUCTION ? 'Unable to send verification code' : error.message;
+    const message = CUSTOMER_OTP_TEST_MODE ? error.message : 'Unable to send verification code';
     res.status(error.message === 'SMS provider is not configured' ? 503 : 500).json({ error: message });
   }
 }
