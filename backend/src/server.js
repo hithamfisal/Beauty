@@ -1,19 +1,36 @@
 import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
-import { query } from './db.js';
+import { query, transaction } from './db.js';
+import { runMigrations } from './migrations.js';
+import { ApiValidationError, assertUuid, uniqueUuidArray, validateBookingShape, validatePhone, validationResponse } from './validation.js';
 import jwt from 'jsonwebtoken';
 import bcrypt from 'bcryptjs';
+import { randomInt } from 'node:crypto';
 
 dotenv.config();
 
 const app = express();
 const PORT = process.env.PORT || 4000;
-const JWT_SECRET = process.env.JWT_SECRET || 'beauty-home-service-local-secret';
+const IS_PRODUCTION = process.env.NODE_ENV === 'production';
+const JWT_SECRET = process.env.JWT_SECRET || (IS_PRODUCTION ? '' : 'beauty-home-service-local-secret');
 const DEFAULT_ADMIN_EMAIL = process.env.ADMIN_EMAIL || 'admin@beauty.local';
 const DEFAULT_ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'Beauty@12345';
 
-app.use(cors());
+if (IS_PRODUCTION && JWT_SECRET.length < 32) throw new Error('JWT_SECRET must be configured with at least 32 characters in production.');
+if (IS_PRODUCTION && (!process.env.ADMIN_EMAIL || !process.env.ADMIN_PASSWORD || process.env.ADMIN_PASSWORD.length < 12)) {
+  throw new Error('ADMIN_EMAIL and a 12+ character ADMIN_PASSWORD are required in production.');
+}
+
+const allowedOrigins = String(process.env.CORS_ALLOWED_ORIGINS || '').split(',').map(v => v.trim()).filter(Boolean);
+if (IS_PRODUCTION && allowedOrigins.length === 0) throw new Error('CORS_ALLOWED_ORIGINS is required in production.');
+
+app.set('trust proxy', 1);
+app.disable('x-powered-by');
+app.use(cors({ origin(origin, callback) {
+  if (!origin || !IS_PRODUCTION || allowedOrigins.includes(origin)) return callback(null, true);
+  return callback(new Error('Origin is not allowed by CORS'));
+} }));
 app.use(express.json({ limit: '20mb' }));
 
 function normalizeText(value) {
@@ -83,6 +100,8 @@ async function ensureV14Schema() {
   await query(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS service_category_id UUID REFERENCES service_categories(id)`);
   await query(`ALTER TABLE artists ADD COLUMN IF NOT EXISTS region_id UUID REFERENCES regions(id)`);
   await query(`ALTER TABLE artists ADD COLUMN IF NOT EXISTS main_expertise_service_id UUID REFERENCES services(id)`);
+  await query(`ALTER TABLE artists ADD COLUMN IF NOT EXISTS main_expertise_category_id UUID REFERENCES service_categories(id)`);
+  await query(`UPDATE artists a SET main_expertise_category_id=s.category_id FROM services s WHERE a.main_expertise_service_id=s.id AND a.main_expertise_category_id IS NULL AND s.category_id IS NOT NULL`);
 
   await query(`
     CREATE TABLE IF NOT EXISTS beautician_services (
@@ -469,6 +488,7 @@ async function ensureV22V23Schema() {
   await query(`ALTER TABLE artists ADD COLUMN IF NOT EXISTS work_start_time TIME DEFAULT '10:00'`);
   await query(`ALTER TABLE artists ADD COLUMN IF NOT EXISTS work_end_time TIME DEFAULT '22:00'`);
   await query(`ALTER TABLE artists ADD COLUMN IF NOT EXISTS max_daily_bookings INT DEFAULT 3`);
+  await query(`ALTER TABLE artists ADD COLUMN IF NOT EXISTS coverage_region_ids JSONB DEFAULT '[]'::jsonb`);
   await query(`ALTER TABLE artists ADD COLUMN IF NOT EXISTS coverage_city_ids JSONB DEFAULT '[]'::jsonb`);
   await query(`ALTER TABLE artists ADD COLUMN IF NOT EXISTS coverage_district_ids JSONB DEFAULT '[]'::jsonb`);
   await query(`CREATE INDEX IF NOT EXISTS idx_artists_availability_status ON artists(availability_status)`);
@@ -542,23 +562,30 @@ async function getSuitableBeauticiansForBooking(bookingId) {
   const where = [`a.status='active'`, `COALESCE(a.availability_status,'available')='available'`];
   if (booking.service_id) {
     params.push(booking.service_id);
-    where.push(`(a.main_expertise_service_id=$${params.length} OR EXISTS (SELECT 1 FROM beautician_services bs WHERE bs.beautician_id=a.id AND bs.service_id=$${params.length}))`);
+    where.push(`(a.main_expertise_service_id=$${params.length} OR a.main_expertise_category_id=(SELECT category_id FROM services WHERE id=$${params.length}) OR EXISTS (SELECT 1 FROM beautician_services bs WHERE bs.beautician_id=a.id AND bs.service_id=$${params.length}))`);
+  } else if (booking.service_category_id) {
+    params.push(booking.service_category_id);
+    where.push(`(a.main_expertise_category_id=$${params.length} OR a.main_expertise_category_id IS NULL)`);
   }
   const result = await query(`
-    SELECT a.*, r.name_ar AS region_name, c.name_ar AS city_name, COALESCE(ms.name_ar, ms.name) AS main_expertise_name,
+    SELECT a.*, r.name_ar AS region_name, c.name_ar AS city_name, COALESCE(mc.name_ar, ms.name_ar, ms.name) AS main_expertise_name,
+      ARRAY(SELECT region_id::text FROM beautician_coverage_regions WHERE beautician_id=a.id) AS coverage_region_ids,
+      ARRAY(SELECT city_id::text FROM beautician_coverage_cities WHERE beautician_id=a.id) AS coverage_city_ids,
+      ARRAY(SELECT district_id::text FROM beautician_coverage_districts WHERE beautician_id=a.id) AS coverage_district_ids,
       COALESCE(ROUND(AVG(br.rating)::numeric,1), ROUND(AVG(ar.overall_rating)::numeric,1), a.rating, 5) AS review_rating,
       COUNT(DISTINCT b2.id)::int AS active_bookings,
       COUNT(DISTINCT p.id)::int AS portfolio_count
     FROM artists a
     LEFT JOIN regions r ON r.id=a.region_id
     LEFT JOIN cities c ON c.id=a.city_id
+    LEFT JOIN service_categories mc ON mc.id=a.main_expertise_category_id
     LEFT JOIN services ms ON ms.id=a.main_expertise_service_id
     LEFT JOIN beautician_reviews br ON br.beautician_id=a.id AND br.status='published'
     LEFT JOIN artist_reviews ar ON ar.artist_id=a.id
     LEFT JOIN beautician_portfolio p ON p.beautician_id=a.id AND p.status='published'
     LEFT JOIN bookings b2 ON b2.assigned_artist_id=a.id AND b2.booking_date=$${params.length + 1} AND b2.status NOT IN ('completed','cancelled')
     WHERE ${where.join(' AND ')}
-    GROUP BY a.id, r.name_ar, c.name_ar, ms.name_ar, ms.name
+    GROUP BY a.id, r.name_ar, c.name_ar, mc.name_ar, ms.name_ar, ms.name
   `, [...params, booking.booking_date]);
 
   const bookingDay = dayOfWeekForDate(booking.booking_date);
@@ -567,12 +594,14 @@ async function getSuitableBeauticiansForBooking(bookingId) {
     const reasons = [];
     const blocked = [];
     const days = parseJsonArray(a.working_days, []);
+    const coverageRegions = parseJsonArray(a.coverage_region_ids, []);
     const coverageCities = parseJsonArray(a.coverage_city_ids, []);
     const coverageDistricts = parseJsonArray(a.coverage_district_ids, []);
     const start = timeToMinutes(a.work_start_time);
     const end = timeToMinutes(a.work_end_time);
     if (bookingDay != null && days.length && !days.map(String).includes(String(bookingDay))) blocked.push('اليوم خارج أيام العمل'); else reasons.push('اليوم مناسب');
     if (requestedTime != null && start != null && end != null && (requestedTime < start || requestedTime > end)) blocked.push('الوقت خارج ساعات العمل'); else reasons.push('الوقت مناسب');
+    if (coverageRegions.length && booking.region_id && !coverageRegions.map(String).includes(String(booking.region_id))) blocked.push('المنطقة خارج التغطية'); else reasons.push('المنطقة ضمن التغطية');
     if (coverageCities.length && booking.city_id && !coverageCities.map(String).includes(String(booking.city_id))) blocked.push('المدينة خارج التغطية'); else reasons.push('المدينة ضمن التغطية');
     if (coverageDistricts.length && booking.district_id && !coverageDistricts.map(String).includes(String(booking.district_id))) blocked.push('الحي خارج التغطية'); else reasons.push('الحي ضمن التغطية');
     if (Number(a.active_bookings || 0) >= Number(a.max_daily_bookings || 3)) blocked.push('وصلت للحد اليومي');
@@ -583,7 +612,7 @@ async function getSuitableBeauticiansForBooking(bookingId) {
 }
 
 function signCustomerToken(customer) {
-  return jwt.sign({ id: customer.id, phone: customer.phone, name: customer.name, scope: 'customer' }, JWT_SECRET, { expiresIn: '30d' });
+  return jwt.sign({ id: customer.id, phone: customer.phone, name: customer.name, scope: 'customer' }, JWT_SECRET, { expiresIn: '7d', issuer: 'beauty-home-service', audience: 'beauty-customer', subject: customer.id });
 }
 
 function authenticateCustomer(req, res, next) {
@@ -591,7 +620,7 @@ function authenticateCustomer(req, res, next) {
   const token = header.startsWith('Bearer ') ? header.slice(7) : null;
   if (!token) return res.status(401).json({ error: 'Customer login required' });
   try {
-    const payload = jwt.verify(token, JWT_SECRET);
+    const payload = jwt.verify(token, JWT_SECRET, { issuer: 'beauty-home-service', audience: 'beauty-customer' });
     if (payload.scope !== 'customer') return res.status(401).json({ error: 'Invalid customer token' });
     req.customer = payload;
     return next();
@@ -607,7 +636,19 @@ async function initSchemas() {
   await ensureV22V23Schema();
 }
 
-initSchemas().catch(error => console.error('schema init failed:', error));
+async function ensureInitialAdmin() {
+  const count = await query(`SELECT COUNT(*)::int AS count FROM admin_users`);
+  if (count.rows[0].count > 0) return;
+  const passwordHash = await bcrypt.hash(DEFAULT_ADMIN_PASSWORD, 12);
+  await query(
+    `INSERT INTO admin_users (name, email, password_hash, role, status) VALUES ($1,$2,$3,'admin','active')`,
+    ['System Admin', DEFAULT_ADMIN_EMAIL.toLowerCase(), passwordHash]
+  );
+  if (!IS_PRODUCTION) console.log(`Local admin created: ${DEFAULT_ADMIN_EMAIL}`);
+}
+
+await runMigrations();
+await ensureInitialAdmin();
 
 
 async function findOrCreateRegion(regionName) {
@@ -666,15 +707,19 @@ function selectNameExpression(alias, fallback = 'name') {
 
 
 function signAdminToken(user) {
-  return jwt.sign({ id: user.id, email: user.email, role: user.role, name: user.name }, JWT_SECRET, { expiresIn: '12h' });
+  return jwt.sign({ id: user.id, email: user.email, role: user.role, name: user.name, scope: 'admin' }, JWT_SECRET, { expiresIn: '8h', issuer: 'beauty-home-service', audience: 'beauty-admin', subject: user.id });
 }
 
-function authenticateAdmin(req, res, next) {
+async function authenticateAdmin(req, res, next) {
   const header = req.headers.authorization || '';
   const token = header.startsWith('Bearer ') ? header.slice(7) : null;
   if (!token) return res.status(401).json({ error: 'Admin login required' });
   try {
-    req.admin = jwt.verify(token, JWT_SECRET);
+    const payload = jwt.verify(token, JWT_SECRET, { issuer: 'beauty-home-service', audience: 'beauty-admin' });
+    if (payload.scope !== 'admin') return res.status(401).json({ error: 'Invalid admin token' });
+    const active = await query(`SELECT id, email, role, name FROM admin_users WHERE id=$1::uuid AND status='active'`, [payload.id]);
+    if (!active.rows[0]) return res.status(401).json({ error: 'Admin account is inactive' });
+    req.admin = active.rows[0];
     return next();
   } catch (_) {
     return res.status(401).json({ error: 'Invalid or expired admin session' });
@@ -686,10 +731,12 @@ app.post('/api/admin/login', async (req, res) => {
     const email = String(req.body.email || '').trim().toLowerCase();
     const password = String(req.body.password || '');
     if (!email || !password) return res.status(400).json({ error: 'Email and password are required' });
+    const recentFailures = await query(`SELECT COUNT(*)::int AS count FROM auth_login_attempts WHERE identity=$1 AND succeeded=FALSE AND created_at > NOW()-INTERVAL '15 minutes'`, [email]);
+    if (recentFailures.rows[0].count >= 8) return res.status(429).json({ error: 'Too many login attempts. Try again later.' });
     const result = await query(`SELECT * FROM admin_users WHERE email=$1 AND status='active' LIMIT 1`, [email]);
     const user = result.rows[0];
-    if (!user) return res.status(401).json({ error: 'Invalid login details' });
-    const ok = await bcrypt.compare(password, user.password_hash);
+    const ok = user ? await bcrypt.compare(password, user.password_hash) : false;
+    await query(`INSERT INTO auth_login_attempts (identity,ip_address,succeeded) VALUES ($1,$2,$3)`, [email, req.ip, ok]);
     if (!ok) return res.status(401).json({ error: 'Invalid login details' });
     const token = signAdminToken(user);
     res.json({ ok: true, token, user: { id: user.id, name: user.name, email: user.email, role: user.role } });
@@ -708,19 +755,24 @@ app.get('/api/regions', async (req, res) => {
 });
 
 app.get('/api/cities', async (req, res) => {
-  const params = [];
-  let where = `WHERE status='active'`;
-  if (req.query.region_id) { params.push(req.query.region_id); where += ` AND region_id=$1`; }
-  const result = await query(`SELECT * FROM cities ${where} ORDER BY sort_order, name_ar`, params);
-  res.json(result.rows);
+  try {
+    const params = [];
+    let where = `WHERE status='active'`;
+    if (req.query.region_id) { assertUuid(req.query.region_id, 'region_id'); params.push(req.query.region_id); where += ` AND region_id=$1::uuid`; }
+    const result = await query(`SELECT * FROM cities ${where} ORDER BY sort_order, name_ar`, params);
+    res.json(result.rows);
+  } catch (error) { if (!validationResponse(error, res)) res.status(500).json({ error: 'Failed to load cities' }); }
 });
 
 app.get('/api/districts', async (req, res) => {
-  const params = [];
-  let where = `WHERE status='active'`;
-  if (req.query.city_id) { params.push(req.query.city_id); where += ` AND city_id=$1`; }
-  const result = await query(`SELECT * FROM districts ${where} ORDER BY sort_order, name_ar`, params);
-  res.json(result.rows);
+  try {
+    const params = [];
+    let where = `WHERE d.status='active'`;
+    if (req.query.city_id) { assertUuid(req.query.city_id, 'city_id'); params.push(req.query.city_id); where += ` AND d.city_id=$${params.length}::uuid`; }
+    else if (req.query.region_id) { assertUuid(req.query.region_id, 'region_id'); params.push(req.query.region_id); where += ` AND c.region_id=$${params.length}::uuid`; }
+    const result = await query(`SELECT d.* FROM districts d LEFT JOIN cities c ON c.id=d.city_id ${where} ORDER BY d.sort_order, d.name_ar`, params);
+    res.json(result.rows);
+  } catch (error) { if (!validationResponse(error, res)) res.status(500).json({ error: 'Failed to load districts' }); }
 });
 
 app.get('/api/districts/:cityId', async (req, res) => {
@@ -728,27 +780,50 @@ app.get('/api/districts/:cityId', async (req, res) => {
   res.json(result.rows);
 });
 
+
+async function ensureDefaultServiceCategories() {
+  const existingCategories = await query(`SELECT COUNT(*)::int AS count FROM service_categories`);
+  if (Number(existingCategories.rows[0]?.count || 0) > 0) return;
+  const cats = [
+    ['الحناء', 'Henna', 'خدمات الحناء والنقوش'],
+    ['المكياج', 'Makeup', 'خدمات مكياج منزلية'],
+    ['الشعر', 'Hair', 'تصفيف وتسريحات الشعر'],
+    ['العناية', 'Care', 'العناية بالبشرة واليدين والقدمين']
+  ];
+  for (let i = 0; i < cats.length; i++) {
+    await query(`INSERT INTO service_categories (name_ar, name_en, description, sort_order, status) VALUES ($1,$2,$3,$4,'active')`, [...cats[i], i + 1]);
+  }
+  const hennaCategory = await query(`SELECT id FROM service_categories WHERE name_ar='الحناء' LIMIT 1`);
+  if (hennaCategory.rows[0]) {
+    await query(`UPDATE services SET category_id = COALESCE(category_id, $1) WHERE category_id IS NULL`, [hennaCategory.rows[0].id]);
+  }
+}
+
 app.get('/api/service-categories', async (req, res) => {
+  await ensureDefaultServiceCategories();
   const result = await query(`SELECT * FROM service_categories WHERE status='active' ORDER BY sort_order, name_ar`);
   res.json(result.rows);
 });
 
 app.get('/api/services', async (req, res) => {
-  const params = [];
-  let where = `WHERE s.status='active'`;
-  if (req.query.category_id) { params.push(req.query.category_id); where += ` AND s.category_id=$1`; }
-  const result = await query(`
+  try {
+    const params = [];
+    let where = `WHERE s.status='active'`;
+    if (req.query.category_id) { assertUuid(req.query.category_id, 'category_id'); params.push(req.query.category_id); where += ` AND s.category_id=$1::uuid`; }
+    const result = await query(`
     SELECT s.*, COALESCE(s.name_ar, s.name) AS display_name, sc.name_ar AS category_name
     FROM services s
     LEFT JOIN service_categories sc ON sc.id=s.category_id
     ${where}
     ORDER BY sc.sort_order, s.sort_order, s.min_price NULLS LAST, COALESCE(s.name_ar, s.name)
-  `, params);
-  res.json(result.rows);
+    `, params);
+    res.json(result.rows);
+  } catch (error) { if (!validationResponse(error, res)) res.status(500).json({ error: 'Failed to load services' }); }
 });
 
 app.get('/api/customer/catalog', async (req, res) => {
   try {
+    await ensureDefaultServiceCategories();
     const [regions, cities, districts, categories, services] = await Promise.all([
       query(`SELECT * FROM regions WHERE status='active' ORDER BY sort_order, name_ar`),
       query(`SELECT * FROM cities WHERE status='active' ORDER BY sort_order, name_ar`),
@@ -762,18 +837,49 @@ app.get('/api/customer/catalog', async (req, res) => {
   }
 });
 
+async function validateLocationRelationships(regionId, cityId, districtId) {
+  assertUuid(regionId, 'region_id');
+  assertUuid(cityId, 'city_id');
+  assertUuid(districtId, 'district_id');
+  const location = await query(`
+    SELECT c.region_id, d.city_id FROM cities c
+    JOIN districts d ON d.id=$2::uuid
+    WHERE c.id=$1::uuid AND c.status='active' AND d.status='active'
+  `, [cityId, districtId]);
+  if (!location.rows[0]) throw new ApiValidationError('Selected city or district does not exist', { location: 'invalid' });
+  if (String(location.rows[0].region_id) !== String(regionId)) throw new ApiValidationError('City does not belong to the selected region', { city_id: 'wrong_parent' });
+  if (String(location.rows[0].city_id) !== String(cityId)) throw new ApiValidationError('District does not belong to the selected city', { district_id: 'wrong_parent' });
+}
+
+async function validateBookingRelationships({ regionId, cityId, districtId, serviceId, serviceCategoryId, preferredArtistId }) {
+  await validateLocationRelationships(regionId, cityId, districtId);
+
+  const service = await query(`SELECT category_id FROM services WHERE id=$1::uuid AND status='active'`, [serviceId]);
+  if (!service.rows[0]) throw new ApiValidationError('Selected service does not exist', { service_id: 'invalid' });
+  if (serviceCategoryId && String(service.rows[0].category_id) !== String(serviceCategoryId)) {
+    throw new ApiValidationError('Service does not belong to the selected category', { service_id: 'wrong_parent' });
+  }
+  if (preferredArtistId) {
+    const artist = await query(`SELECT 1 FROM artists WHERE id=$1::uuid AND status='active'`, [preferredArtistId]);
+    if (!artist.rows[0]) throw new ApiValidationError('Preferred beautician is unavailable', { preferred_artist_id: 'invalid' });
+  }
+  return service.rows[0].category_id;
+}
+
 app.post('/api/bookings', async (req, res) => {
   try {
-    const b = req.body;
+    const b = req.body || {};
+    const shape = validateBookingShape(b);
     const regionId = b.region_id || await findOrCreateRegion(b.region);
     const cityId = b.city_id || await findOrCreateCity(b.city, regionId);
     const districtId = b.district_id || await findOrCreateDistrict(cityId, b.district);
     const serviceId = b.service_id || await findServiceId(b.service_type || b.service_name || b.service);
-    const serviceData = serviceId ? await query(`SELECT category_id FROM services WHERE id=$1`, [serviceId]) : { rows: [] };
-    const serviceCategoryId = b.service_category_id || serviceData.rows[0]?.category_id || null;
     const preferredArtistId = b.preferred_artist_id || b.beautician_id || null;
+    const actualCategoryId = await validateBookingRelationships({ regionId, cityId, districtId, serviceId, serviceCategoryId: b.service_category_id || null, preferredArtistId });
+    const serviceCategoryId = b.service_category_id || actualCategoryId;
     const bookingNumber = await generateBookingNumber();
-    const bookingSource = nullable(b.booking_source || b.source || req.headers['x-booking-source']) || 'web';
+    const bookingSource = nullable(b.booking_source || b.source || req.headers['x-booking-source']) || shape.source;
+    if (!['web','mobile','admin','legacy'].includes(bookingSource)) throw new ApiValidationError('Invalid booking source', { booking_source: 'invalid' });
     const customerId = await findOrCreateCustomer({ ...b, region_id: regionId, city_id: cityId, district_id: districtId });
 
     if (!customerId) return res.status(400).json({ error: 'Customer is required. Send customer_id or phone.' });
@@ -793,7 +899,7 @@ app.post('/api/bookings', async (req, res) => {
       RETURNING *
     `, [
       customerId, regionId, cityId, districtId, serviceCategoryId, nullable(b.event_type), serviceId,
-      b.booking_date, b.booking_time, b.people_count || 1, nullable(b.address), b.latitude || null, b.longitude || null,
+      b.booking_date, b.booking_time, shape.peopleCount, nullable(b.address), b.latitude || null, b.longitude || null,
       b.design_image_url || null, nullable(b.customer_notes), preferredArtistId,
       nullable(b.contact_preference) || 'whatsapp', nullable(b.alternate_time), bookingNumber, bookingSource
     ]);
@@ -802,6 +908,7 @@ app.post('/api/bookings', async (req, res) => {
     await logBookingEvent(result.rows[0].id, 'created', 'تم إنشاء الطلب', `تم إنشاء الطلب من ${bookingSource}`, bookingSource === 'admin' ? 'admin' : 'customer', null, { booking_number: bookingNumber, source: bookingSource });
     res.status(201).json(result.rows[0]);
   } catch (error) {
+    if (validationResponse(error, res)) return;
     console.error('Create booking error:', error);
     res.status(500).json({ error: 'Failed to create booking', details: error.message });
   }
@@ -869,6 +976,7 @@ app.get('/api/admin/bookings/:id', async (req, res) => {
 
 app.patch('/api/admin/bookings/:id/status', async (req, res) => {
   try {
+    assertUuid(req.params.id, 'id');
     const requestedStatus = normalizeBookingStatus(req.body.status || req.body.new_status);
     if (!requestedStatus) {
       return res.status(400).json({
@@ -900,6 +1008,7 @@ app.patch('/api/admin/bookings/:id/status', async (req, res) => {
 
     res.json({ ok: true, booking: result.rows[0], status: requestedStatus, label: BOOKING_STATUS_LABELS[requestedStatus] });
   } catch (error) {
+    if (validationResponse(error, res)) return;
     console.error('Update booking status error:', error);
     res.status(500).json({ error: 'Failed to update booking status', details: error.message });
   }
@@ -921,6 +1030,7 @@ app.patch('/api/admin/bookings/:id/details', async (req, res) => {
 
 app.patch('/api/admin/bookings/:id/payment', async (req, res) => {
   try {
+    assertUuid(req.params.id, 'id');
     const allowed = ['unpaid', 'deposit_paid', 'paid', 'refunded'];
     const paymentStatus = req.body.payment_status || 'unpaid';
     if (!allowed.includes(paymentStatus)) return res.status(400).json({ error: 'Invalid payment status' });
@@ -929,12 +1039,13 @@ app.patch('/api/admin/bookings/:id/payment', async (req, res) => {
     await query(`INSERT INTO booking_status_history (booking_id, old_status, new_status, changed_by, note) VALUES ($1,$2,$2,'admin',$3)`, [req.params.id, result.rows[0].status, `تم تحديث حالة الدفع إلى ${paymentStatus}`]);
     await logBookingEvent(req.params.id, 'payment_updated', 'تم تحديث حالة الدفع', `حالة الدفع: ${paymentStatus}`, 'admin', req.admin?.email || null);
     res.json(result.rows[0]);
-  } catch (error) { res.status(500).json({ error: 'Failed to update payment status', details: error.message }); }
+  } catch (error) { if (!validationResponse(error, res)) res.status(500).json({ error: 'Failed to update payment status', details: error.message }); }
 });
 
 
 app.patch('/api/admin/bookings/:id/payment-details', async (req, res) => {
   try {
+    assertUuid(req.params.id, 'id');
     const allowed = ['unpaid', 'deposit_paid', 'paid', 'refunded'];
     const b = req.body || {};
     const current = await query(`SELECT * FROM bookings WHERE id=$1`, [req.params.id]);
@@ -981,6 +1092,8 @@ app.delete('/api/admin/bookings/:id', async (req, res) => {
 app.patch('/api/admin/bookings/:id/assign-artist', async (req, res) => {
   try {
     const { artist_id, force } = req.body;
+    assertUuid(req.params.id, 'id');
+    if (artist_id) assertUuid(artist_id, 'artist_id');
     const current = await query(`SELECT id, status, booking_date, booking_time, city_id, district_id, service_id FROM bookings WHERE id=$1`, [req.params.id]);
     if (!current.rows[0]) return res.status(404).json({ error: 'Booking not found' });
     if (artist_id && !force) {
@@ -995,7 +1108,7 @@ app.patch('/api/admin/bookings/:id/assign-artist', async (req, res) => {
     await query(`INSERT INTO booking_status_history (booking_id, old_status, new_status, changed_by, note) VALUES ($1,$2,$3,'admin',$4)`, [req.params.id, current.rows[0].status, newStatus, artist_id ? 'تم تعيين خبيرة التجميل' : 'تم إلغاء تعيين خبيرة التجميل']);
     await logBookingEvent(req.params.id, 'beautician_assigned', artist_id ? 'تم تعيين خبيرة التجميل' : 'تم إلغاء تعيين الخبيرة', artist_id || '', 'admin', req.admin?.email || null);
     res.json(result.rows[0]);
-  } catch (error) { res.status(500).json({ error: 'Failed to assign beautician', details: error.message }); }
+  } catch (error) { if (!validationResponse(error, res)) res.status(500).json({ error: 'Failed to assign beautician', details: error.message }); }
 });
 
 app.get('/api/admin/bookings/:id/smart-beauticians', async (req, res) => {
@@ -1008,33 +1121,72 @@ app.get('/api/admin/bookings/:id/smart-beauticians', async (req, res) => {
 
 app.get('/api/admin/beauticians/:id/availability', async (req, res) => {
   try {
-    const result = await query(`SELECT id, name, availability_status, working_days, work_start_time, work_end_time, max_daily_bookings, coverage_city_ids, coverage_district_ids FROM artists WHERE id=$1`, [req.params.id]);
+    assertUuid(req.params.id, 'id');
+    const result = await query(`SELECT a.id, a.name, a.availability_status, a.working_days, a.work_start_time, a.work_end_time, a.max_daily_bookings,
+      ARRAY(SELECT region_id::text FROM beautician_coverage_regions WHERE beautician_id=a.id ORDER BY region_id) AS coverage_region_ids,
+      ARRAY(SELECT city_id::text FROM beautician_coverage_cities WHERE beautician_id=a.id ORDER BY city_id) AS coverage_city_ids,
+      ARRAY(SELECT district_id::text FROM beautician_coverage_districts WHERE beautician_id=a.id ORDER BY district_id) AS coverage_district_ids
+      FROM artists a WHERE a.id=$1::uuid`, [req.params.id]);
     if (!result.rows[0]) return res.status(404).json({ error: 'Beautician not found' });
     res.json(result.rows[0]);
-  } catch (error) { res.status(500).json({ error: 'Failed to load availability', details: error.message }); }
+  } catch (error) { if (!validationResponse(error, res)) res.status(500).json({ error: 'Failed to load availability', details: error.message }); }
 });
+
+async function validateCoverageSelection(regionIds, cityIds, districtIds) {
+  if (regionIds.length) {
+    const regions = await query(`SELECT COUNT(*)::int AS count FROM regions WHERE id=ANY($1::uuid[]) AND status='active'`, [regionIds]);
+    if (regions.rows[0].count !== regionIds.length) throw new ApiValidationError('One or more coverage regions are invalid', { coverage_region_ids: 'invalid' });
+  }
+  if (cityIds.length) {
+    const cities = await query(`SELECT id::text, region_id::text FROM cities WHERE id=ANY($1::uuid[]) AND status='active'`, [cityIds]);
+    if (cities.rows.length !== cityIds.length) throw new ApiValidationError('One or more coverage cities are invalid', { coverage_city_ids: 'invalid' });
+    if (regionIds.length && cities.rows.some(city => !regionIds.includes(city.region_id))) {
+      throw new ApiValidationError('A coverage city is outside the selected regions', { coverage_city_ids: 'wrong_parent' });
+    }
+  }
+  if (districtIds.length) {
+    const districts = await query(`SELECT id::text, city_id::text FROM districts WHERE id=ANY($1::uuid[]) AND status='active'`, [districtIds]);
+    if (districts.rows.length !== districtIds.length) throw new ApiValidationError('One or more coverage districts are invalid', { coverage_district_ids: 'invalid' });
+    if (cityIds.length && districts.rows.some(district => !cityIds.includes(district.city_id))) {
+      throw new ApiValidationError('A coverage district is outside the selected cities', { coverage_district_ids: 'wrong_parent' });
+    }
+    if (!cityIds.length && regionIds.length) {
+      const valid = await query(`SELECT d.id::text FROM districts d JOIN cities c ON c.id=d.city_id WHERE d.id=ANY($1::uuid[]) AND c.region_id=ANY($2::uuid[])`, [districtIds, regionIds]);
+      if (valid.rows.length !== districtIds.length) throw new ApiValidationError('A coverage district is outside the selected regions', { coverage_district_ids: 'wrong_parent' });
+    }
+  }
+}
 
 app.patch('/api/admin/beauticians/:id/availability', async (req, res) => {
   try {
+    assertUuid(req.params.id, 'id');
     const b = req.body || {};
     const workingDays = JSON.stringify(parseJsonArray(b.working_days, [0,1,2,3,4,5]).map(Number).filter(n => Number.isInteger(n) && n >= 0 && n <= 6));
-    const coverageCities = JSON.stringify(parseJsonArray(b.coverage_city_ids, []).filter(Boolean));
-    const coverageDistricts = JSON.stringify(parseJsonArray(b.coverage_district_ids, []).filter(Boolean));
-    const result = await query(`
-      UPDATE artists SET
-        availability_status=$1::varchar,
-        working_days=$2::jsonb,
-        work_start_time=$3::time,
-        work_end_time=$4::time,
-        max_daily_bookings=$5::int,
-        coverage_city_ids=$6::jsonb,
-        coverage_district_ids=$7::jsonb,
-        updated_at=NOW()
-      WHERE id=$8::uuid RETURNING *
-    `, [b.availability_status || 'available', workingDays, b.work_start_time || '10:00', b.work_end_time || '22:00', Number(b.max_daily_bookings || 3), coverageCities, coverageDistricts, req.params.id]);
+    const coverageRegions = uniqueUuidArray(parseJsonArray(b.coverage_region_ids, []), 'coverage_region_ids');
+    const coverageCities = uniqueUuidArray(parseJsonArray(b.coverage_city_ids, []), 'coverage_city_ids');
+    const coverageDistricts = uniqueUuidArray(parseJsonArray(b.coverage_district_ids, []), 'coverage_district_ids');
+    const availabilityStatus = b.availability_status || 'available';
+    if (!['available','busy','inactive'].includes(availabilityStatus)) throw new ApiValidationError('Invalid availability status', { availability_status: 'invalid' });
+    const maxDaily = Number(b.max_daily_bookings || 3);
+    if (!Number.isInteger(maxDaily) || maxDaily < 1 || maxDaily > 20) throw new ApiValidationError('max_daily_bookings must be between 1 and 20', { max_daily_bookings: 'invalid' });
+    await validateCoverageSelection(coverageRegions, coverageCities, coverageDistricts);
+    const result = await transaction(async client => {
+      const updated = await client.query(`UPDATE artists SET availability_status=$1::varchar, working_days=$2::jsonb,
+        work_start_time=$3::time, work_end_time=$4::time, max_daily_bookings=$5::int,
+        coverage_region_ids=$6::jsonb, coverage_city_ids=$7::jsonb, coverage_district_ids=$8::jsonb, updated_at=NOW()
+        WHERE id=$9::uuid RETURNING *`, [availabilityStatus, workingDays, b.work_start_time || '10:00', b.work_end_time || '22:00', maxDaily, JSON.stringify(coverageRegions), JSON.stringify(coverageCities), JSON.stringify(coverageDistricts), req.params.id]);
+      if (!updated.rows[0]) return updated;
+      await client.query(`DELETE FROM beautician_coverage_regions WHERE beautician_id=$1::uuid`, [req.params.id]);
+      await client.query(`DELETE FROM beautician_coverage_cities WHERE beautician_id=$1::uuid`, [req.params.id]);
+      await client.query(`DELETE FROM beautician_coverage_districts WHERE beautician_id=$1::uuid`, [req.params.id]);
+      if (coverageRegions.length) await client.query(`INSERT INTO beautician_coverage_regions (beautician_id,region_id) SELECT $1::uuid, unnest($2::uuid[])`, [req.params.id, coverageRegions]);
+      if (coverageCities.length) await client.query(`INSERT INTO beautician_coverage_cities (beautician_id,city_id) SELECT $1::uuid, unnest($2::uuid[])`, [req.params.id, coverageCities]);
+      if (coverageDistricts.length) await client.query(`INSERT INTO beautician_coverage_districts (beautician_id,district_id) SELECT $1::uuid, unnest($2::uuid[])`, [req.params.id, coverageDistricts]);
+      return updated;
+    });
     if (!result.rows[0]) return res.status(404).json({ error: 'Beautician not found' });
-    res.json(result.rows[0]);
-  } catch (error) { res.status(500).json({ error: 'Failed to update availability', details: error.message }); }
+    res.json({ ...result.rows[0], coverage_region_ids: coverageRegions, coverage_city_ids: coverageCities, coverage_district_ids: coverageDistricts });
+  } catch (error) { if (!validationResponse(error, res)) res.status(500).json({ error: 'Failed to update availability', details: error.message }); }
 });
 
 function activeOrAll(req) { return req.query.all === '1' ? '' : `WHERE status='active'`; }
@@ -1049,6 +1201,7 @@ async function listDistricts(all = false) {
   return query(`SELECT d.*, c.name_ar AS city_name, r.name_ar AS region_name FROM districts d LEFT JOIN cities c ON c.id=d.city_id LEFT JOIN regions r ON r.id=c.region_id ${all ? '' : `WHERE d.status='active'`} ORDER BY r.sort_order, c.sort_order, d.sort_order, d.name_ar`);
 }
 async function listServiceCategories(all = false) {
+  await ensureDefaultServiceCategories();
   return query(`SELECT * FROM service_categories ${all ? '' : `WHERE status='active'`} ORDER BY sort_order, name_ar`);
 }
 async function listServices(all = false) {
@@ -1070,16 +1223,19 @@ function catalogRoutes(name, table, fields, listFn) {
   });
   app.post(`/api/admin/${name}`, async (req, res) => {
     try {
+      await validateCatalogPayload(table, req.body || {}, false);
       const columns = fields.filter(f => req.body[f] !== undefined);
       const values = columns.map(f => req.body[f]);
       if (!columns.length) return res.status(400).json({ error: 'No fields sent.' });
       const placeholders = columns.map((_, i) => `$${i + 1}`).join(',');
       const result = await query(`INSERT INTO ${table} (${columns.join(',')}) VALUES (${placeholders}) RETURNING *`, values);
       res.status(201).json(result.rows[0]);
-    } catch (error) { res.status(500).json({ error: `Failed to create ${name}`, details: error.message }); }
+    } catch (error) { if (!validationResponse(error, res)) res.status(500).json({ error: `Failed to create ${name}`, details: error.message }); }
   });
   app.patch(`/api/admin/${name}/:id`, async (req, res) => {
     try {
+      assertUuid(req.params.id, 'id');
+      await validateCatalogPayload(table, req.body || {}, true);
       const columns = fields.filter(f => req.body[f] !== undefined);
       if (!columns.length) return res.status(400).json({ error: 'No fields sent.' });
       const sets = columns.map((f, i) => `${f}=$${i + 1}`).join(', ');
@@ -1087,7 +1243,7 @@ function catalogRoutes(name, table, fields, listFn) {
       const result = await query(`UPDATE ${table} SET ${sets}, updated_at=NOW() WHERE id=$${values.length} RETURNING *`, values);
       if (!result.rows[0]) return res.status(404).json({ error: 'Not found' });
       res.json(result.rows[0]);
-    } catch (error) { res.status(500).json({ error: `Failed to update ${name}`, details: error.message }); }
+    } catch (error) { if (!validationResponse(error, res)) res.status(500).json({ error: `Failed to update ${name}`, details: error.message }); }
   });
   app.patch(`/api/admin/${name}/:id/status`, async (req, res) => {
     try {
@@ -1106,6 +1262,36 @@ function catalogRoutes(name, table, fields, listFn) {
       res.json({ ok: true, deleted_id: req.params.id });
     } catch (error) { res.status(500).json({ error: `Failed to delete ${name}`, details: error.message }); }
   });
+}
+
+async function validateCatalogPayload(table, body, partial) {
+  if (body.status !== undefined && !['active','inactive'].includes(body.status)) throw new ApiValidationError('Invalid catalog status', { status: 'invalid' });
+  if (body.sort_order !== undefined && (!Number.isInteger(Number(body.sort_order)) || Number(body.sort_order) < 0)) throw new ApiValidationError('sort_order must be a non-negative integer', { sort_order: 'invalid' });
+  if (!partial && ['regions','cities','districts','service_categories','services'].includes(table) && !String(body.name_ar || '').trim()) {
+    throw new ApiValidationError('Arabic name is required', { name_ar: 'required' });
+  }
+  if (table === 'cities' && (!partial || body.region_id !== undefined)) {
+    assertUuid(body.region_id, 'region_id');
+    const parent = await query(`SELECT 1 FROM regions WHERE id=$1::uuid AND status='active'`, [body.region_id]);
+    if (!parent.rows[0]) throw new ApiValidationError('Selected region is invalid', { region_id: 'invalid' });
+  }
+  if (table === 'districts' && (!partial || body.city_id !== undefined)) {
+    assertUuid(body.city_id, 'city_id');
+    const parent = await query(`SELECT 1 FROM cities WHERE id=$1::uuid AND status='active'`, [body.city_id]);
+    if (!parent.rows[0]) throw new ApiValidationError('Selected city is invalid', { city_id: 'invalid' });
+  }
+  if (table === 'services' && (!partial || body.category_id !== undefined)) {
+    assertUuid(body.category_id, 'category_id');
+    const parent = await query(`SELECT 1 FROM service_categories WHERE id=$1::uuid AND status='active'`, [body.category_id]);
+    if (!parent.rows[0]) throw new ApiValidationError('Selected service category is invalid', { category_id: 'invalid' });
+  }
+  if (table === 'services') {
+    for (const field of ['base_price','min_price','max_price']) {
+      if (body[field] !== undefined && body[field] !== null && (Number.isNaN(Number(body[field])) || Number(body[field]) < 0)) throw new ApiValidationError(`${field} must be non-negative`, { [field]: 'invalid' });
+    }
+    if (body.min_price !== undefined && body.max_price !== undefined && Number(body.min_price) > Number(body.max_price)) throw new ApiValidationError('Minimum price cannot exceed maximum price', { max_price: 'less_than_minimum' });
+    if (body.duration_minutes !== undefined && (!Number.isInteger(Number(body.duration_minutes)) || Number(body.duration_minutes) <= 0)) throw new ApiValidationError('duration_minutes must be positive', { duration_minutes: 'invalid' });
+  }
 }
 
 catalogRoutes('regions', 'regions', ['external_id','name_ar','name_en','status','sort_order'], listRegions);
@@ -1358,7 +1544,10 @@ app.post('/api/admin/import/spl', async (req, res) => {
 
 async function listBeauticians() {
   return query(`
-    SELECT a.*, r.name_ar AS region_name, c.name_ar AS city_name, COALESCE(ms.name_ar, ms.name) AS main_expertise_name,
+    SELECT a.*, r.name_ar AS region_name, c.name_ar AS city_name, COALESCE(mc.name_ar, ms.name_ar, ms.name) AS main_expertise_name,
+      ARRAY(SELECT region_id::text FROM beautician_coverage_regions WHERE beautician_id=a.id) AS coverage_region_ids,
+      ARRAY(SELECT city_id::text FROM beautician_coverage_cities WHERE beautician_id=a.id) AS coverage_city_ids,
+      ARRAY(SELECT district_id::text FROM beautician_coverage_districts WHERE beautician_id=a.id) AS coverage_district_ids,
       COUNT(DISTINCT b.id)::int AS total_bookings,
       COUNT(DISTINCT CASE WHEN b.status='completed' THEN b.id END)::int AS completed_bookings,
       ROUND(AVG(rv.overall_rating)::numeric,1) AS review_rating,
@@ -1367,11 +1556,12 @@ async function listBeauticians() {
     FROM artists a
     LEFT JOIN regions r ON r.id=a.region_id
     LEFT JOIN cities c ON c.id=a.city_id
+    LEFT JOIN service_categories mc ON mc.id=a.main_expertise_category_id
     LEFT JOIN services ms ON ms.id=a.main_expertise_service_id
     LEFT JOIN bookings b ON b.assigned_artist_id=a.id
     LEFT JOIN artist_reviews rv ON rv.artist_id=a.id
     LEFT JOIN artist_availability av ON av.artist_id=a.id AND av.available_date >= CURRENT_DATE
-    GROUP BY a.id, r.name_ar, c.name_ar, ms.name_ar, ms.name
+    GROUP BY a.id, r.name_ar, c.name_ar, mc.name_ar, ms.name_ar, ms.name
     ORDER BY a.created_at DESC
   `);
 }
@@ -1381,26 +1571,51 @@ app.get(['/api/admin/artists','/api/admin/beauticians'], async (req, res) => {
   catch (error) { res.status(500).json({ error: 'Failed to load beauticians', details: error.message }); }
 });
 
+async function validateBeauticianPayload(a, { partial = false } = {}) {
+  if (!partial || a.phone !== undefined) validatePhone(a.phone);
+  for (const field of ['region_id','city_id','main_expertise_category_id']) if (a[field]) assertUuid(a[field], field);
+  const serviceIds = uniqueUuidArray(a.service_ids || [], 'service_ids');
+  if (a.status && !['active','inactive'].includes(a.status)) throw new ApiValidationError('Invalid beautician status', { status: 'invalid' });
+  if (a.rating !== undefined && (Number(a.rating) < 0 || Number(a.rating) > 5)) throw new ApiValidationError('Rating must be between 0 and 5', { rating: 'invalid' });
+  if (a.city_id) {
+    const city = await query(`SELECT region_id::text FROM cities WHERE id=$1::uuid AND status='active'`, [a.city_id]);
+    if (!city.rows[0]) throw new ApiValidationError('Selected city is invalid', { city_id: 'invalid' });
+    if (a.region_id && city.rows[0].region_id !== String(a.region_id)) throw new ApiValidationError('City does not belong to the selected region', { city_id: 'wrong_parent' });
+  }
+  if (a.main_expertise_category_id) {
+    const category = await query(`SELECT 1 FROM service_categories WHERE id=$1::uuid AND status='active'`, [a.main_expertise_category_id]);
+    if (!category.rows[0]) throw new ApiValidationError('Main expertise category is invalid', { main_expertise_category_id: 'invalid' });
+  }
+  if (serviceIds.length) {
+    const services = await query(`SELECT COUNT(*)::int AS count FROM services WHERE id=ANY($1::uuid[]) AND status='active'`, [serviceIds]);
+    if (services.rows[0].count !== serviceIds.length) throw new ApiValidationError('One or more supported services are invalid', { service_ids: 'invalid' });
+  }
+  return serviceIds;
+}
+
 app.post(['/api/admin/artists','/api/admin/beauticians'], async (req, res) => {
   try {
-    const a = req.body;
+    const a = req.body || {};
     if (!a.name || !a.phone) return res.status(400).json({ error: 'Beautician name and phone are required.' });
+    const serviceIds = await validateBeauticianPayload(a);
     const result = await query(`
-      INSERT INTO artists (name, phone, region_id, city_id, districts, skills, bio, rating, status, main_expertise_service_id)
+      INSERT INTO artists (name, phone, region_id, city_id, districts, skills, bio, rating, status, main_expertise_category_id)
       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *
-    `, [nullable(a.name), normalizePhone(a.phone), a.region_id || null, a.city_id || null, nullable(a.districts), nullable(a.skills), nullable(a.bio), a.rating || 5, a.status || 'active', a.main_expertise_service_id || null]);
+    `, [nullable(a.name), normalizePhone(a.phone), a.region_id || null, a.city_id || null, nullable(a.districts), nullable(a.skills), nullable(a.bio), a.rating || 5, a.status || 'active', a.main_expertise_category_id || null]);
     if (Array.isArray(a.service_ids)) {
-      for (const serviceId of a.service_ids) {
-        await query(`INSERT INTO beautician_services (beautician_id, service_id, is_primary) VALUES ($1,$2,$3) ON CONFLICT (beautician_id, service_id) DO UPDATE SET is_primary=EXCLUDED.is_primary`, [result.rows[0].id, serviceId, serviceId === a.main_expertise_service_id]);
+      for (const serviceId of serviceIds) {
+        await query(`INSERT INTO beautician_services (beautician_id, service_id, is_primary) VALUES ($1,$2,$3) ON CONFLICT (beautician_id, service_id) DO UPDATE SET is_primary=EXCLUDED.is_primary`, [result.rows[0].id, serviceId, false]);
       }
     }
     res.status(201).json(result.rows[0]);
-  } catch (error) { res.status(500).json({ error: 'Failed to create beautician', details: error.message }); }
+  } catch (error) { if (!validationResponse(error, res)) res.status(500).json({ error: 'Failed to create beautician', details: error.message }); }
 });
 
 app.patch(['/api/admin/artists/:id','/api/admin/beauticians/:id'], async (req, res) => {
   try {
-    const allowed = ['name','phone','region_id','city_id','districts','skills','bio','rating','status','main_expertise_service_id'];
+    assertUuid(req.params.id, 'id');
+    const serviceIds = await validateBeauticianPayload(req.body || {}, { partial: true });
+    const allowed = ['name','phone','region_id','city_id','districts','skills','bio','rating','status','main_expertise_category_id'];
     const columns = allowed.filter(f => req.body[f] !== undefined);
     if (!columns.length && !Array.isArray(req.body.service_ids)) return res.status(400).json({ error: 'No fields sent.' });
     let updated = null;
@@ -1412,12 +1627,12 @@ app.patch(['/api/admin/artists/:id','/api/admin/beauticians/:id'], async (req, r
     }
     if (Array.isArray(req.body.service_ids)) {
       await query(`DELETE FROM beautician_services WHERE beautician_id=$1`, [req.params.id]);
-      for (const serviceId of req.body.service_ids) {
-        await query(`INSERT INTO beautician_services (beautician_id, service_id, is_primary) VALUES ($1,$2,$3)`, [req.params.id, serviceId, serviceId === req.body.main_expertise_service_id]);
+      for (const serviceId of serviceIds) {
+        await query(`INSERT INTO beautician_services (beautician_id, service_id, is_primary) VALUES ($1,$2,$3)`, [req.params.id, serviceId, false]);
       }
     }
     res.json(updated || { ok: true });
-  } catch (error) { res.status(500).json({ error: 'Failed to update beautician', details: error.message }); }
+  } catch (error) { if (!validationResponse(error, res)) res.status(500).json({ error: 'Failed to update beautician', details: error.message }); }
 });
 
 app.delete(['/api/admin/artists/:id','/api/admin/beauticians/:id'], async (req, res) => {
@@ -1435,24 +1650,32 @@ app.get('/api/beauticians', async (req, res) => {
     const params = [];
     const where = [`COALESCE(a.status,'active') IN ('active','available')`, `COALESCE(a.availability_status,'available')='available'`];
     if (req.query.region_id) {
+      assertUuid(req.query.region_id, 'region_id');
       params.push(req.query.region_id);
-      where.push(`(a.region_id=$${params.length}::uuid OR a.region_id IS NULL)`);
+      where.push(`(a.region_id=$${params.length}::uuid OR NOT EXISTS (SELECT 1 FROM beautician_coverage_regions x WHERE x.beautician_id=a.id) OR EXISTS (SELECT 1 FROM beautician_coverage_regions x WHERE x.beautician_id=a.id AND x.region_id=$${params.length}::uuid))`);
     }
     if (req.query.city_id) {
+      assertUuid(req.query.city_id, 'city_id');
       params.push(req.query.city_id);
-      where.push(`(a.city_id=$${params.length}::uuid OR a.city_id IS NULL OR COALESCE(a.coverage_city_ids,'[]'::jsonb) ? $${params.length}::text OR COALESCE(a.coverage_city_ids,'[]'::jsonb)='[]'::jsonb)`);
+      where.push(`(a.city_id=$${params.length}::uuid OR NOT EXISTS (SELECT 1 FROM beautician_coverage_cities x WHERE x.beautician_id=a.id) OR EXISTS (SELECT 1 FROM beautician_coverage_cities x WHERE x.beautician_id=a.id AND x.city_id=$${params.length}::uuid))`);
     }
     if (req.query.district_id) {
+      assertUuid(req.query.district_id, 'district_id');
       params.push(req.query.district_id);
-      where.push(`(COALESCE(a.coverage_district_ids,'[]'::jsonb) ? $${params.length}::text OR COALESCE(a.coverage_district_ids,'[]'::jsonb)='[]'::jsonb)`);
+      where.push(`(NOT EXISTS (SELECT 1 FROM beautician_coverage_districts x WHERE x.beautician_id=a.id) OR EXISTS (SELECT 1 FROM beautician_coverage_districts x WHERE x.beautician_id=a.id AND x.district_id=$${params.length}::uuid))`);
     }
     if (req.query.service_id) {
+      assertUuid(req.query.service_id, 'service_id');
       params.push(req.query.service_id);
-      where.push(`(a.main_expertise_service_id=$${params.length}::uuid OR EXISTS (SELECT 1 FROM beautician_services bs WHERE bs.beautician_id=a.id AND bs.service_id=$${params.length}::uuid))`);
+      where.push(`(a.main_expertise_service_id=$${params.length}::uuid OR a.main_expertise_category_id=(SELECT category_id FROM services WHERE id=$${params.length}::uuid) OR EXISTS (SELECT 1 FROM beautician_services bs WHERE bs.beautician_id=a.id AND bs.service_id=$${params.length}::uuid))`);
+    } else if (req.query.category_id) {
+      assertUuid(req.query.category_id, 'category_id');
+      params.push(req.query.category_id);
+      where.push(`(a.main_expertise_category_id=$${params.length}::uuid OR a.main_expertise_category_id IS NULL)`);
     }
     const result = await query(`
-      SELECT a.id, a.name, a.phone, a.bio, a.skills, a.rating, a.status, a.availability_status, a.region_id, a.city_id, a.main_expertise_service_id,
-        r.name_ar AS region_name, c.name_ar AS city_name, COALESCE(ms.name_ar, ms.name) AS main_expertise_name,
+      SELECT a.id, a.name, a.phone, a.bio, a.skills, a.rating, a.status, a.availability_status, a.region_id, a.city_id, a.main_expertise_category_id, a.main_expertise_service_id,
+        r.name_ar AS region_name, c.name_ar AS city_name, COALESCE(mc.name_ar, ms.name_ar, ms.name) AS main_expertise_name,
         COALESCE(ROUND(AVG(br.rating)::numeric,1), ROUND(AVG(ar.overall_rating)::numeric,1), a.rating) AS review_rating,
         (COUNT(DISTINCT br.id) + COUNT(DISTINCT ar.id))::int AS review_count,
         COUNT(DISTINCT p.id)::int AS portfolio_count,
@@ -1461,32 +1684,34 @@ app.get('/api/beauticians', async (req, res) => {
       FROM artists a
       LEFT JOIN regions r ON r.id=a.region_id
       LEFT JOIN cities c ON c.id=a.city_id
-      LEFT JOIN services ms ON ms.id=a.main_expertise_service_id
+      LEFT JOIN service_categories mc ON mc.id=a.main_expertise_category_id
+    LEFT JOIN services ms ON ms.id=a.main_expertise_service_id
       LEFT JOIN beautician_portfolio p ON p.beautician_id=a.id AND p.status='published'
       LEFT JOIN beautician_reviews br ON br.beautician_id=a.id AND br.status='published'
       LEFT JOIN artist_reviews ar ON ar.artist_id=a.id
       WHERE ${where.join(' AND ')}
-      GROUP BY a.id, r.name_ar, c.name_ar, ms.name_ar, ms.name
+      GROUP BY a.id, r.name_ar, c.name_ar, mc.name_ar, ms.name_ar, ms.name
       ORDER BY review_rating DESC NULLS LAST, portfolio_count DESC, a.name
     `, params);
     res.json(result.rows);
-  } catch (error) { res.status(500).json({ error: 'Failed to load beauticians', details: error.message }); }
+  } catch (error) { if (!validationResponse(error, res)) res.status(500).json({ error: 'Failed to load beauticians', details: error.message }); }
 });
 
 app.get('/api/beauticians/:id', async (req, res) => {
   try {
     const info = await query(`
-      SELECT a.*, r.name_ar AS region_name, c.name_ar AS city_name, COALESCE(ms.name_ar, ms.name) AS main_expertise_name,
+      SELECT a.*, r.name_ar AS region_name, c.name_ar AS city_name, COALESCE(mc.name_ar, ms.name_ar, ms.name) AS main_expertise_name,
         COALESCE(ROUND(AVG(br.rating)::numeric,1), ROUND(AVG(ar.overall_rating)::numeric,1), a.rating) AS review_rating,
         (COUNT(DISTINCT br.id) + COUNT(DISTINCT ar.id))::int AS review_count
       FROM artists a
       LEFT JOIN regions r ON r.id=a.region_id
       LEFT JOIN cities c ON c.id=a.city_id
-      LEFT JOIN services ms ON ms.id=a.main_expertise_service_id
+      LEFT JOIN service_categories mc ON mc.id=a.main_expertise_category_id
+    LEFT JOIN services ms ON ms.id=a.main_expertise_service_id
       LEFT JOIN beautician_reviews br ON br.beautician_id=a.id AND br.status='published'
       LEFT JOIN artist_reviews ar ON ar.artist_id=a.id
       WHERE a.id=$1
-      GROUP BY a.id, r.name_ar, c.name_ar, ms.name_ar, ms.name
+      GROUP BY a.id, r.name_ar, c.name_ar, mc.name_ar, ms.name_ar, ms.name
     `, [req.params.id]);
     if (!info.rows[0]) return res.status(404).json({ error: 'Beautician not found' });
     const portfolio = await query(`SELECT p.*, COALESCE(s.name_ar, s.name) AS service_name, sc.name_ar AS category_name FROM beautician_portfolio p LEFT JOIN services s ON s.id=p.service_id LEFT JOIN service_categories sc ON sc.id=p.service_category_id WHERE p.beautician_id=$1 AND p.status='published' ORDER BY p.is_featured DESC, p.sort_order, p.created_at DESC`, [req.params.id]);
@@ -1714,37 +1939,68 @@ app.get('/api/customer/bookings/:id', async (req, res) => {
 });
 
 
+async function deliverCustomerOtp(phone, otp) {
+  if (!IS_PRODUCTION) return;
+  const url = process.env.SMS_API_URL;
+  const token = process.env.SMS_API_TOKEN;
+  if (!url || !token) throw new Error('SMS provider is not configured');
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
+    body: JSON.stringify({ to: phone, message: `Beauty Home Service OTP: ${otp}`, sender: process.env.SMS_SENDER_ID || 'Beauty' })
+  });
+  if (!response.ok) throw new Error(`SMS provider rejected the request (${response.status})`);
+}
+
+export function buildOtpResponse(otp, production = IS_PRODUCTION) {
+  const response = { ok: true, message: 'تم إرسال رمز التحقق.' };
+  if (!production) response.dev_otp = otp;
+  return response;
+}
+
 async function requestCustomerOtp(req, res) {
   try {
-    const phone = normalizePhone(req.body.phone);
+    const phone = validatePhone(req.body.phone);
     const name = nullable(req.body.name);
-    if (!phone) return res.status(400).json({ error: 'phone is required' });
+    const recent = await query(`SELECT COUNT(*)::int AS count FROM customer_otp_codes WHERE (phone=$1 OR requested_ip=$2) AND created_at > NOW()-INTERVAL '15 minutes'`, [phone, req.ip]);
+    if (recent.rows[0].count >= 5) return res.status(429).json({ error: 'Too many OTP requests. Try again later.' });
     let customer = await query(`SELECT * FROM customers WHERE phone=$1 LIMIT 1`, [phone]);
     if (!customer.rows[0]) {
       customer = await query(`INSERT INTO customers (name, phone, status) VALUES ($1,$2,'active') RETURNING *`, [name || 'عميلة', phone]);
     } else if (name) {
       customer = await query(`UPDATE customers SET name=COALESCE($1,name), updated_at=NOW() WHERE id=$2 RETURNING *`, [name, customer.rows[0].id]);
     }
-    const otp = process.env.NODE_ENV === 'production' ? String(Math.floor(100000 + Math.random() * 900000)) : '1234';
+    const otp = IS_PRODUCTION ? String(randomInt(100000, 1000000)) : '1234';
+    const otpHash = await bcrypt.hash(otp, 10);
+    await deliverCustomerOtp(phone, otp);
     await query(`UPDATE customer_otp_codes SET used_at=NOW() WHERE phone=$1 AND used_at IS NULL`, [phone]);
-    await query(`INSERT INTO customer_otp_codes (customer_id, phone, otp_code, purpose, expires_at) VALUES ($1,$2,$3,'login',NOW() + INTERVAL '10 minutes')`, [customer.rows[0].id, phone, otp]);
-    res.json({ ok: true, message: 'تم إنشاء رمز التحقق.', dev_otp: otp });
-  } catch (error) { res.status(500).json({ error: 'Failed to request OTP', details: error.message }); }
+    await query(`INSERT INTO customer_otp_codes (customer_id, phone, otp_code, purpose, expires_at, requested_ip) VALUES ($1,$2,$3,'login',NOW() + INTERVAL '10 minutes',$4)`, [customer.rows[0].id, phone, otpHash, req.ip]);
+    res.json(buildOtpResponse(otp));
+  } catch (error) {
+    if (validationResponse(error, res)) return;
+    const message = IS_PRODUCTION ? 'Unable to send verification code' : error.message;
+    res.status(error.message === 'SMS provider is not configured' ? 503 : 500).json({ error: message });
+  }
 }
 
 async function verifyCustomerOtp(req, res) {
   try {
-    const phone = normalizePhone(req.body.phone);
+    const phone = validatePhone(req.body.phone);
     const code = String(req.body.otp || req.body.code || '').trim();
-    if (!phone || !code) return res.status(400).json({ error: 'phone and otp are required' });
-    const otp = await query(`SELECT * FROM customer_otp_codes WHERE phone=$1 AND otp_code=$2 AND used_at IS NULL AND expires_at > NOW() ORDER BY created_at DESC LIMIT 1`, [phone, code]);
-    if (!otp.rows[0]) return res.status(400).json({ error: 'Invalid or expired OTP' });
+    if (!/^\d{4,6}$/.test(code)) return res.status(400).json({ error: 'Invalid or expired OTP' });
+    const otp = await query(`SELECT * FROM customer_otp_codes WHERE phone=$1 AND used_at IS NULL AND expires_at > NOW() ORDER BY created_at DESC LIMIT 1`, [phone]);
+    if (!otp.rows[0] || otp.rows[0].attempt_count >= 5) return res.status(400).json({ error: 'Invalid or expired OTP' });
+    const valid = await bcrypt.compare(code, otp.rows[0].otp_code);
+    if (!valid) {
+      await query(`UPDATE customer_otp_codes SET attempt_count=attempt_count+1, used_at=CASE WHEN attempt_count+1>=5 THEN NOW() ELSE used_at END WHERE id=$1`, [otp.rows[0].id]);
+      return res.status(400).json({ error: 'Invalid or expired OTP' });
+    }
     await query(`UPDATE customer_otp_codes SET used_at=NOW() WHERE id=$1`, [otp.rows[0].id]);
     const customer = await query(`SELECT * FROM customers WHERE id=$1 LIMIT 1`, [otp.rows[0].customer_id]);
     if (!customer.rows[0]) return res.status(404).json({ error: 'Customer not found' });
     const token = signCustomerToken(customer.rows[0]);
     res.json({ ok: true, token, customer: { id: customer.rows[0].id, name: customer.rows[0].name, phone: customer.rows[0].phone } });
-  } catch (error) { res.status(500).json({ error: 'Failed to verify OTP', details: error.message }); }
+  } catch (error) { if (!validationResponse(error, res)) res.status(500).json({ error: 'Failed to verify OTP' }); }
 }
 
 app.post('/api/customer/auth/request-otp', requestCustomerOtp);
@@ -1776,10 +2032,11 @@ app.post('/api/customer/addresses', authenticateCustomer, async (req, res) => {
   try {
     const a = req.body || {};
     if (!a.address) return res.status(400).json({ error: 'address is required' });
+    await validateLocationRelationships(a.region_id, a.city_id, a.district_id);
     if (a.is_default) await query(`UPDATE customer_addresses SET is_default=FALSE WHERE customer_id=$1`, [req.customer.id]);
     const result = await query(`INSERT INTO customer_addresses (customer_id, region_id, city_id, district_id, label, address, is_default) VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *`, [req.customer.id, a.region_id || null, a.city_id || null, a.district_id || null, nullable(a.label) || 'عنوان', nullable(a.address), !!a.is_default]);
     res.status(201).json(result.rows[0]);
-  } catch (error) { res.status(500).json({ error: 'Failed to save address', details: error.message }); }
+  } catch (error) { if (!validationResponse(error, res)) res.status(500).json({ error: 'Failed to save address', details: error.message }); }
 });
 
 app.delete('/api/customer/addresses/:id', authenticateCustomer, async (req, res) => {
@@ -1789,7 +2046,7 @@ app.delete('/api/customer/addresses/:id', authenticateCustomer, async (req, res)
 
 app.get('/api/customer/favorites', authenticateCustomer, async (req, res) => {
   try {
-    const result = await query(`SELECT f.*, a.name AS beautician_name, a.phone AS beautician_phone, COALESCE(s.name_ar, s.name) AS main_expertise_name FROM customer_favorite_beauticians f LEFT JOIN artists a ON a.id=f.beautician_id LEFT JOIN services s ON s.id=a.main_expertise_service_id WHERE f.customer_id=$1 ORDER BY f.created_at DESC`, [req.customer.id]);
+    const result = await query(`SELECT f.*, a.name AS beautician_name, a.phone AS beautician_phone, COALESCE(sc.name_ar, s.name_ar, s.name) AS main_expertise_name FROM customer_favorite_beauticians f LEFT JOIN artists a ON a.id=f.beautician_id LEFT JOIN service_categories sc ON sc.id=a.main_expertise_category_id LEFT JOIN services s ON s.id=a.main_expertise_service_id WHERE f.customer_id=$1 ORDER BY f.created_at DESC`, [req.customer.id]);
     res.json(result.rows);
   } catch (error) { res.status(500).json({ error: 'Failed to load favorites', details: error.message }); }
 });
@@ -1855,7 +2112,7 @@ app.post('/api/admin/artist-reviews', async (req, res) => {
 });
 
 const isVercel = !!process.env.VERCEL;
-if (!isVercel) {
+if (!isVercel && process.env.NODE_ENV !== 'test') {
   app.listen(PORT, () => console.log(`Beauty Home Service API running on port ${PORT}`));
 }
 

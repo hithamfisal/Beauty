@@ -1,3 +1,5 @@
+// ignore_for_file: deprecated_member_use
+
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
@@ -85,27 +87,92 @@ class _BookingScreenState extends State<BookingScreen> {
   @override void initState(){ super.initState(); loadSavedPhone(); loadInitialLists(); }
   Future<void> loadSavedPhone() async { final prefs=await SharedPreferences.getInstance(); final saved=prefs.getString(savedCustomerPhoneKey); if(saved!=null&&mounted) phone.text=saved; }
   @override void dispose(){ name.dispose();phone.dispose();eventType.dispose();people.dispose();address.dispose();notes.dispose();designImageUrl.dispose();alternateTime.dispose();super.dispose(); }
-  Future<void> loadInitialLists() async { setState(() => loading = true); try { final results = await Future.wait([ApiClient.get('/regions'), ApiClient.get('/service-categories')]); regions = safeList(results[0]); categories = safeList(results[1]); } catch (e) { error = e.toString(); } finally { if (mounted) setState(() => loading = false); } }
-  Future<void> loadCities(String? regionId) async { selectedRegionId = regionId; selectedCityId = null; selectedDistrictId = null; preferredBeauticianId = null; cities = []; districts = []; beauticians=[]; portfolio=[]; if (regionId==null||regionId.isEmpty) { setState((){}); return; } setState(()=>loading=true); try { cities = safeList(await ApiClient.get('/cities?region_id=$regionId')); } catch(e){ error=e.toString(); } finally { if(mounted) setState(()=>loading=false); } }
-  Future<void> loadDistricts(String? cityId) async { selectedCityId=cityId; selectedDistrictId=null; preferredBeauticianId=null; districts=[]; beauticians=[]; portfolio=[]; if(cityId==null||cityId.isEmpty){setState((){});return;} setState(()=>loading=true); try{ districts=safeList(await ApiClient.get('/districts?city_id=$cityId')); await loadBeauticians(); }catch(e){error=e.toString();}finally{if(mounted)setState(()=>loading=false);} }
-  Future<void> loadServices(String? categoryId) async { selectedCategoryId=categoryId; selectedServiceId=null; preferredBeauticianId=null; services=[]; beauticians=[]; portfolio=[]; if(categoryId==null||categoryId.isEmpty){setState((){});return;} setState(()=>loading=true); try{ services=safeList(await ApiClient.get('/services?category_id=$categoryId')); }catch(e){error=e.toString();}finally{if(mounted)setState(()=>loading=false);} }
+  Future<void> loadInitialLists() async {
+    setState(() => loading = true);
+    try {
+      final results = await Future.wait([
+        ApiClient.get('/regions'),
+        ApiClient.get('/service-categories'),
+        ApiClient.get('/cities'),
+        ApiClient.get('/districts'),
+        ApiClient.get('/services'),
+        ApiClient.get('/beauticians'),
+        ApiClient.get('/portfolio'),
+      ]);
+      regions = safeList(results[0]);
+      categories = safeList(results[1]);
+      cities = safeList(results[2]);
+      districts = safeList(results[3]);
+      services = safeList(results[4]);
+      beauticians = safeList(results[5]);
+      portfolio = safeList(results[6]);
+    } catch (e) { error = e.toString(); }
+    finally { if (mounted) setState(() => loading = false); }
+  }
+  Future<void> loadCities(String? regionId) async {
+    selectedRegionId = regionId; selectedCityId = null; selectedDistrictId = null; preferredBeauticianId = null;
+    setState(()=>loading=true);
+    try {
+      cities = safeList(await ApiClient.get((regionId==null||regionId.isEmpty) ? '/cities' : '/cities?region_id=$regionId'));
+      districts = safeList(await ApiClient.get((regionId==null||regionId.isEmpty) ? '/districts' : '/districts?region_id=$regionId'));
+      await loadBeauticians(refreshState:false);
+    } catch(e){ error=e.toString(); }
+    finally { if(mounted) setState(()=>loading=false); }
+  }
+  Future<void> loadDistricts(String? cityId) async {
+    selectedCityId=cityId; selectedDistrictId=null; preferredBeauticianId=null;
+    setState(()=>loading=true);
+    try{
+      districts=safeList(await ApiClient.get((cityId==null||cityId.isEmpty) ? ((selectedRegionId==null||selectedRegionId!.isEmpty) ? '/districts' : '/districts?region_id=$selectedRegionId') : '/districts?city_id=$cityId'));
+      await loadBeauticians(refreshState:false);
+    }catch(e){error=e.toString();}
+    finally{if(mounted)setState(()=>loading=false);}
+  }
+  Future<void> loadServices(String? categoryId) async {
+    selectedCategoryId=categoryId; selectedServiceId=null; preferredBeauticianId=null;
+    setState(()=>loading=true);
+    try{
+      services=safeList(await ApiClient.get((categoryId==null||categoryId.isEmpty) ? '/services' : '/services?category_id=$categoryId'));
+      await loadBeauticians(refreshState:false);
+    }catch(e){error=e.toString();}
+    finally{if(mounted)setState(()=>loading=false);}
+  }
   Future<void> selectService(String? serviceId) async { selectedServiceId=serviceId; preferredBeauticianId=null; await loadBeauticians(); }
-  Future<void> loadBeauticians() async { if(selectedServiceId==null||selectedServiceId!.isEmpty){setState((){});return;} final qs=['service_id=$selectedServiceId']; if(selectedRegionId!=null) qs.add('region_id=$selectedRegionId'); if(selectedCityId!=null) qs.add('city_id=$selectedCityId'); if(selectedDistrictId!=null) qs.add('district_id=$selectedDistrictId'); beauticians=safeList(await ApiClient.get('/beauticians?${qs.join('&')}')); if(beauticians.isEmpty) beauticians=safeList(await ApiClient.get('/beauticians')); portfolio=safeList(await ApiClient.get('/portfolio?service_id=$selectedServiceId')); if(portfolio.isEmpty && selectedCategoryId!=null) portfolio=safeList(await ApiClient.get('/portfolio?category_id=$selectedCategoryId')); if(portfolio.isEmpty) portfolio=safeList(await ApiClient.get('/portfolio')); if(mounted)setState((){}); }
+  Future<void> loadBeauticians({bool refreshState=true}) async {
+    final qs=<String>[];
+    if(selectedServiceId!=null && selectedServiceId!.isNotEmpty) qs.add('service_id=$selectedServiceId');
+    if(selectedRegionId!=null && selectedRegionId!.isNotEmpty) qs.add('region_id=$selectedRegionId');
+    if(selectedCityId!=null && selectedCityId!.isNotEmpty) qs.add('city_id=$selectedCityId');
+    if(selectedDistrictId!=null && selectedDistrictId!.isNotEmpty) qs.add('district_id=$selectedDistrictId');
+    beauticians=safeList(await ApiClient.get(qs.isEmpty ? '/beauticians' : '/beauticians?${qs.join('&')}'));
+    if(beauticians.isEmpty && qs.isNotEmpty) beauticians=safeList(await ApiClient.get('/beauticians'));
+    if(selectedServiceId!=null && selectedServiceId!.isNotEmpty) {
+      portfolio=safeList(await ApiClient.get('/portfolio?service_id=$selectedServiceId'));
+      if(portfolio.isEmpty && selectedCategoryId!=null && selectedCategoryId!.isNotEmpty) portfolio=safeList(await ApiClient.get('/portfolio?category_id=$selectedCategoryId'));
+      if(portfolio.isEmpty) portfolio=safeList(await ApiClient.get('/portfolio'));
+    } else if(selectedCategoryId!=null && selectedCategoryId!.isNotEmpty) {
+      portfolio=safeList(await ApiClient.get('/portfolio?category_id=$selectedCategoryId'));
+      if(portfolio.isEmpty) portfolio=safeList(await ApiClient.get('/portfolio'));
+    } else {
+      portfolio=safeList(await ApiClient.get('/portfolio'));
+    }
+    if(refreshState && mounted)setState((){});
+  }
   String dateText()=> bookingDate==null ? 'اختيار التاريخ' : '${bookingDate!.year}-${bookingDate!.month.toString().padLeft(2,'0')}-${bookingDate!.day.toString().padLeft(2,'0')}';
   String timeText()=> bookingTime==null ? 'اختيار الوقت' : '${bookingTime!.hour.toString().padLeft(2,'0')}:${bookingTime!.minute.toString().padLeft(2,'0')}';
-  Future<void> submit() async { if(!formKey.currentState!.validate()) return; if(bookingDate==null||bookingTime==null){ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content:Text('اختر التاريخ والوقت')));return;} if([selectedRegionId,selectedCityId,selectedDistrictId,selectedCategoryId,selectedServiceId].any((e)=>e==null||e.toString().isEmpty)){ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content:Text('أكمل اختيار الموقع والخدمة')));return;} setState(()=>saving=true); try{final customerPhone=normalizePhone(phone.text); final created=await ApiClient.post('/bookings', {'name':name.text.trim(),'phone':customerPhone,'region_id':selectedRegionId,'city_id':selectedCityId,'district_id':selectedDistrictId,'service_category_id':selectedCategoryId,'event_type':eventType.text.trim(),'service_id':selectedServiceId,'preferred_artist_id':preferredBeauticianId,'booking_date':dateText(),'booking_time':timeText(),'people_count':int.tryParse(people.text.trim())??1,'address':address.text.trim(),'design_image_url':designImageUrl.text.trim().isEmpty?null:designImageUrl.text.trim(),'customer_notes':notes.text.trim(),'contact_preference':contactPreference,'alternate_time':alternateTime.text.trim(),'booking_source':'mobile'}); final prefs=await SharedPreferences.getInstance(); await prefs.setString(savedCustomerPhoneKey, customerPhone); if(!mounted)return; Navigator.pushReplacement(context, MaterialPageRoute(builder:(_)=>BookingSubmittedScreen(bookingId:(created['booking_number'] ?? created['id'])?.toString(), phone:customerPhone)));}catch(e){ScaffoldMessenger.of(context).showSnackBar(SnackBar(content:Text('تعذر إرسال الطلب: $e')));}finally{if(mounted)setState(()=>saving=false);} }
+  Future<void> submit() async { if(!formKey.currentState!.validate()) return; if(bookingDate==null||bookingTime==null){ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content:Text('اختر التاريخ والوقت')));return;} if([selectedRegionId,selectedCityId,selectedDistrictId,selectedServiceId].any((e)=>e==null||e.toString().isEmpty)){ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content:Text('أكمل اختيار الموقع والخدمة')));return;} setState(()=>saving=true); try{final customerPhone=normalizePhone(phone.text); final created=await ApiClient.post('/bookings', {'name':name.text.trim(),'phone':customerPhone,'region_id':selectedRegionId,'city_id':selectedCityId,'district_id':selectedDistrictId,'service_category_id':selectedCategoryId,'event_type':eventType.text.trim(),'service_id':selectedServiceId,'preferred_artist_id':preferredBeauticianId,'booking_date':dateText(),'booking_time':timeText(),'people_count':int.tryParse(people.text.trim())??1,'address':address.text.trim(),'design_image_url':designImageUrl.text.trim().isEmpty?null:designImageUrl.text.trim(),'customer_notes':notes.text.trim(),'contact_preference':contactPreference,'alternate_time':alternateTime.text.trim(),'booking_source':'mobile'}); final prefs=await SharedPreferences.getInstance(); await prefs.setString(savedCustomerPhoneKey, customerPhone); if(!mounted)return; Navigator.pushReplacement(context, MaterialPageRoute(builder:(_)=>BookingSubmittedScreen(bookingId:(created['booking_number'] ?? created['id'])?.toString(), phone:customerPhone)));}catch(e){ScaffoldMessenger.of(context).showSnackBar(SnackBar(content:Text('تعذر إرسال الطلب: $e')));}finally{if(mounted)setState(()=>saving=false);} }
   @override Widget build(BuildContext context)=>Scaffold(backgroundColor:const Color(0xFFFBF4EA), appBar:AppBar(title:const Text('طلب حجز Beauty Home Service')), body: loading?const Center(child:CircularProgressIndicator()):Form(key:formKey, child:ListView(padding:const EdgeInsets.all(18), children:[
     if(error!=null) Text('تنبيه: $error', style:TextStyle(color:Colors.orange.shade900)),
     TextFormField(controller:name, decoration:inputDecoration('اسم العميلة'), validator:(v)=>requiredValidator(v).isEmpty?null:requiredValidator(v)), const SizedBox(height:12),
     TextFormField(controller:phone, keyboardType:TextInputType.phone, decoration:inputDecoration('رقم الجوال'), validator:(v)=>requiredValidator(v).isEmpty?null:requiredValidator(v)), const SizedBox(height:12),
     dropdown('المنطقة', selectedRegionId, regions, loadCities), const SizedBox(height:12), dropdown('المدينة', selectedCityId, cities, loadDistricts), const SizedBox(height:12), dropdown('الحي', selectedDistrictId, districts, (v)=>setState(()=>selectedDistrictId=v)), const SizedBox(height:12),
-    TextFormField(controller:eventType, decoration:inputDecoration('نوع المناسبة'), validator:(v)=>requiredValidator(v).isEmpty?null:requiredValidator(v)), const SizedBox(height:12), dropdown('قسم الخدمة', selectedCategoryId, categories, loadServices), const SizedBox(height:12), dropdown('الخدمة', selectedServiceId, services, selectService), const SizedBox(height:12),
+    TextFormField(controller:eventType, decoration:inputDecoration('نوع المناسبة'), validator:(v)=>requiredValidator(v).isEmpty?null:requiredValidator(v)), const SizedBox(height:12), dropdown('قسم الخدمة', selectedCategoryId, categories, loadServices, required: false, emptyLabel: 'كل الأقسام'), const SizedBox(height:12), dropdown('الخدمة', selectedServiceId, services, selectService, emptyLabel: 'كل الخدمات / اختاري الخدمة'), const SizedBox(height:12),
     if(portfolio.isNotEmpty) PortfolioStrip(items: portfolio, onTapBeautician: (id){ setState(()=>preferredBeauticianId=id); }),
     if(beauticians.isNotEmpty) DropdownButtonFormField<String>(value: preferredBeauticianId ?? '', decoration:inputDecoration('خبيرة مفضلة - اختياري'), items:[const DropdownMenuItem<String>(value:'', child:Text('اتركي الاختيار للدعم')), ...beauticians.map<DropdownMenuItem<String>>((a)=>DropdownMenuItem(value:a['id']?.toString(), child:Text('${a['name']} • ${a['review_rating'] ?? a['rating'] ?? '-'}★')))], onChanged:(v)=>setState(()=>preferredBeauticianId=(v==null||v.isEmpty)?null:v)),
     const SizedBox(height:12), Row(children:[Expanded(child:OutlinedButton(onPressed:()async{final d=await showDatePicker(context:context, firstDate:DateTime.now(), lastDate:DateTime.now().add(const Duration(days:365)), initialDate:DateTime.now()); if(d!=null)setState(()=>bookingDate=d);}, child:Text(dateText()))), const SizedBox(width:10), Expanded(child:OutlinedButton(onPressed:()async{final t=await showTimePicker(context:context, initialTime:const TimeOfDay(hour:18,minute:0)); if(t!=null)setState(()=>bookingTime=t);}, child:Text(timeText()))) ]), const SizedBox(height:12),
     TextFormField(controller:people, keyboardType:TextInputType.number, decoration:inputDecoration('عدد الأشخاص')), const SizedBox(height:12), TextFormField(controller:address, decoration:inputDecoration('العنوان'), validator:(v)=>requiredValidator(v).isEmpty?null:requiredValidator(v)), const SizedBox(height:12), TextFormField(controller:designImageUrl, decoration:inputDecoration('رابط صورة التصميم - اختياري')), const SizedBox(height:12), DropdownButtonFormField<String>(value:contactPreference, decoration:inputDecoration('طريقة التواصل المفضلة'), items:const [DropdownMenuItem(value:'whatsapp', child:Text('واتساب')), DropdownMenuItem(value:'call', child:Text('اتصال')), DropdownMenuItem(value:'sms', child:Text('رسالة SMS'))], onChanged:(v)=>setState(()=>contactPreference=v??'whatsapp')), const SizedBox(height:12), TextFormField(controller:alternateTime, decoration:inputDecoration('وقت بديل - اختياري')), const SizedBox(height:12), TextFormField(controller:notes, minLines:2, maxLines:4, decoration:inputDecoration('ملاحظات')), const SizedBox(height:20), FilledButton(onPressed:saving?null:submit, child:Text(saving?'جاري الإرسال...':'إرسال الطلب'))
   ])));
-  Widget dropdown(String label, String? value, List items, Function(String?) onChanged) => DropdownButtonFormField<String>(value:(value!=null && items.any((i)=>i['id']?.toString()==value))?value:null, decoration:inputDecoration(label), items:items.map<DropdownMenuItem<String>>((i)=>DropdownMenuItem(value:i['id']?.toString(), child:Text(nameOf(i)))).toList(), onChanged:onChanged, validator:(v)=>(v==null||v.isEmpty)?'مطلوب':null);
+  Widget dropdown(String label, String? value, List items, Function(String?) onChanged, {bool required = true, String? emptyLabel}) => DropdownButtonFormField<String>(value:(value!=null && items.any((i)=>i['id']?.toString()==value))?value:null, decoration:inputDecoration(label), items:[DropdownMenuItem<String>(value:'', child:Text(emptyLabel ?? 'اختر')), ...items.map<DropdownMenuItem<String>>((i)=>DropdownMenuItem(value:i['id']?.toString(), child:Text(nameOf(i))))], onChanged:onChanged, validator:(v)=>required && (v==null||v.isEmpty)?'مطلوب':null);
 }
 
 class PortfolioStrip extends StatelessWidget { final List items; final void Function(String?)? onTapBeautician; const PortfolioStrip({super.key, required this.items, this.onTapBeautician}); @override Widget build(BuildContext context)=>Column(crossAxisAlignment:CrossAxisAlignment.start, children:[const Text('نماذج أعمال مشابهة', style:TextStyle(fontSize:18,fontWeight:FontWeight.bold)), const SizedBox(height:8), SizedBox(height:210, child:ListView.separated(scrollDirection:Axis.horizontal, itemCount:items.length, separatorBuilder:(_,__)=>const SizedBox(width:10), itemBuilder:(context,i){ final p=items[i]; return InkWell(onTap:()=>onTapBeautician?.call(p['beautician_id']?.toString()), child:Container(width:180, decoration:BoxDecoration(color:Colors.white,borderRadius:BorderRadius.circular(18), border:Border.all(color:const Color(0xFFE8D6C3))), padding:const EdgeInsets.all(8), child:Column(crossAxisAlignment:CrossAxisAlignment.start, children:[ClipRRect(borderRadius:BorderRadius.circular(14), child:Image.network(p['image_url']??'', height:115, width:164, fit:BoxFit.cover, errorBuilder:(_,__,___)=>Container(height:115,color:const Color(0xFFF2E6D9),child:const Icon(Icons.image)))), const SizedBox(height:8), Text(p['title_ar']??'-', maxLines:1, overflow:TextOverflow.ellipsis, style:const TextStyle(fontWeight:FontWeight.bold)), Text(p['beautician_name']??'-', maxLines:1, overflow:TextOverflow.ellipsis), Text(p['service_name']??'', maxLines:1, overflow:TextOverflow.ellipsis, style:const TextStyle(fontSize:12,color:Colors.brown))]))); }))]); }

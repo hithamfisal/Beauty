@@ -1,7 +1,7 @@
 name: beauty_home_service
-description: Beauty Home Service customer app v1.5
+description: Beauty Home Service customer app v2.3
 publish_to: 'none'
-version: 0.5.0+5
+version: 2.3.0+23
 
 environment:
   sdk: '>=3.0.0 <4.0.0'
@@ -15,7 +15,7 @@ dependencies:
 dev_dependencies:
   flutter_test:
     sdk: flutter
+  flutter_lints: ^6.0.0
 
 flutter:
   uses-material-design: true
-

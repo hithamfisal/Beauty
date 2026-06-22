@@ -4,7 +4,9 @@
   "type": "module",
   "scripts": {
     "dev": "node --watch src/server.js",
-    "start": "node src/server.js"
+    "start": "node src/server.js",
+    "migrate": "node src/migrate-cli.js",
+    "test": "node --test --test-concurrency=1 test/*.test.js"
   },
   "dependencies": {
     "bcryptjs": "latest",
@@ -15,5 +17,7 @@
     "multer": "latest",
     "pg": "latest"
   },
-  "devDependencies": {}
+  "devDependencies": {
+    "supertest": "^7.2.2"
+  }
 }

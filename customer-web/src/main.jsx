@@ -106,16 +106,16 @@ function App() {
       await Promise.all([loadCities(''), loadDistricts(''), loadServices(''), loadBeauticians()]);
     } catch (e) { setMessage(`تعذر تحميل البيانات: ${e.message}`); }
   }
-  async function loadCities(regionId) {
-    try { const r = await api(regionId ? `/cities?region_id=${regionId}` : '/cities'); setCities(r || []); }
+  async function loadCities() {
+    try { const r = await api('/cities'); setCities(r || []); }
     catch (e) { setMessage(`تعذر تحميل المدن: ${e.message}`); }
   }
-  async function loadDistricts(cityId) {
-    try { const r = await api(cityId ? `/districts?city_id=${cityId}` : '/districts'); setDistricts(r || []); }
+  async function loadDistricts() {
+    try { const r = await api('/districts'); setDistricts(r || []); }
     catch (e) { setMessage(`تعذر تحميل الأحياء: ${e.message}`); }
   }
-  async function loadServices(categoryId) {
-    try { const r = await api(categoryId ? `/services?category_id=${categoryId}` : '/services'); setServices(r || []); }
+  async function loadServices() {
+    try { const r = await api('/services'); setServices(r || []); }
     catch (e) { setMessage(`تعذر تحميل الخدمات: ${e.message}`); }
   }
   async function loadBeauticians() {
@@ -197,7 +197,7 @@ function App() {
     e?.preventDefault?.(); setLoading(true); setMessage('');
     try {
       const r = await api('/customer/auth/request-otp', { method:'POST', body: JSON.stringify({ phone: authPhone }) });
-      setMessage(`تم إرسال رمز التحقق. رمز التجربة: ${r.dev_otp || 'تم الإرسال'}`);
+      setMessage(r.dev_otp ? `تم إنشاء رمز التحقق المحلي: ${r.dev_otp}` : 'تم إرسال رمز التحقق إلى جوالك.');
     } catch(e) { setMessage(`تعذر إرسال رمز التحقق: ${e.message}`); }
     finally { setLoading(false); }
   }
@@ -235,6 +235,17 @@ function App() {
 
   function logoutCustomer() { localStorage.removeItem('beauty_customer_token'); setCustomerToken(''); setCustomer(null); setAccountBookings([]); setAddresses([]); }
 
+  const bookingCities = useMemo(() => cities.filter(c => !booking.region_id || c.region_id === booking.region_id), [cities, booking.region_id]);
+  const bookingDistricts = useMemo(() => districts.filter(d => {
+    if (booking.city_id) return d.city_id === booking.city_id;
+    if (booking.region_id) {
+      const city = cities.find(c => String(c.id) === String(d.city_id));
+      return city && String(city.region_id) === String(booking.region_id);
+    }
+    return true;
+  }), [districts, cities, booking.city_id, booking.region_id]);
+  const bookingServices = useMemo(() => services.filter(s => !booking.service_category_id || s.category_id === booking.service_category_id), [services, booking.service_category_id]);
+
   return <div className="app">
     <header className="hero">
       <nav>
@@ -253,7 +264,7 @@ function App() {
     {loading && <div className="loading">جاري التحميل...</div>}
 
     {tab === 'home' && <Home categories={categories} portfolio={portfolio} beauticians={beauticians} setTab={setTab} openBeautician={openBeautician} />}
-    {tab === 'booking' && <BookingForm booking={booking} setBookingField={setBookingField} regions={regions} cities={cities} districts={districts} categories={categories} services={services} beauticians={beauticians} portfolio={portfolio} uploadImage={uploadImage} submitBooking={submitBooking} openBeautician={openBeautician} />}
+    {tab === 'booking' && <BookingForm booking={booking} setBookingField={setBookingField} regions={regions} cities={bookingCities} districts={bookingDistricts} categories={categories} services={bookingServices} beauticians={beauticians} portfolio={portfolio} uploadImage={uploadImage} submitBooking={submitBooking} openBeautician={openBeautician} />}
     {tab === 'beauticians' && <BeauticiansPage beauticians={beauticians} portfolio={portfolio} openBeautician={openBeautician} />}
     {tab === 'beautician' && <BeauticianDetails data={selectedBeautician} choose={(id) => { setBookingField('preferred_artist_id', id); setTab('booking'); }} />}
     {tab === 'track' && <TrackPage phone={trackingPhone} setPhone={setTrackingPhone} results={trackingResults} submit={trackBookings} />}
@@ -280,8 +291,8 @@ function BookingForm({ booking, setBookingField, regions, cities, districts, cat
     <Field label="المنطقة"><Select value={booking.region_id} onChange={v=>setBookingField('region_id',v)}><OptionList items={regions} empty="كل المناطق / اختاري المنطقة" /></Select></Field>
     <Field label="المدينة"><Select value={booking.city_id} onChange={v=>setBookingField('city_id',v)}><OptionList items={cities} empty="كل المدن / اختاري المدينة" /></Select></Field>
     <Field label="الحي"><Select value={booking.district_id} onChange={v=>setBookingField('district_id',v)}><OptionList items={districts} empty="اختاري الحي" /></Select></Field>
-    <Field label="قسم الخدمة"><Select required value={booking.service_category_id} onChange={v=>setBookingField('service_category_id',v)}><OptionList items={categories} empty="اختاري القسم" /></Select></Field>
-    <Field label="الخدمة"><Select required value={booking.service_id} onChange={v=>setBookingField('service_id',v)}><OptionList items={services} empty="اختاري الخدمة" /></Select></Field>
+    <Field label="قسم الخدمة"><Select value={booking.service_category_id} onChange={v=>setBookingField('service_category_id',v)}><OptionList items={categories} empty="كل الأقسام" /></Select></Field>
+    <Field label="الخدمة"><Select required value={booking.service_id} onChange={v=>setBookingField('service_id',v)}><OptionList items={services} empty="كل الخدمات / اختاري الخدمة" /></Select></Field>
     <Field label="نوع المناسبة"><Input value={booking.event_type} onChange={v=>setBookingField('event_type',v)} /></Field>
     <Field label="التاريخ"><Input required type="date" value={booking.booking_date} onChange={v=>setBookingField('booking_date',v)} /></Field>
     <Field label="الوقت"><Input required type="time" value={booking.booking_time} onChange={v=>setBookingField('booking_time',v)} /></Field>
@@ -321,7 +332,14 @@ function TrackPage({ phone, setPhone, results, submit }) {
 
 function AccountPage({ customerToken, customer, authPhone, setAuthPhone, otp, setOtp, requestOtp, verifyOtp, logoutCustomer, bookings, addresses, addressForm, setAddressForm, saveAddress, regions, cities, districts }) {
   const filteredCities = cities.filter(c => !addressForm.region_id || c.region_id === addressForm.region_id);
-  const filteredDistricts = districts.filter(d => !addressForm.city_id || d.city_id === addressForm.city_id);
+  const filteredDistricts = districts.filter(d => {
+    if (addressForm.city_id) return d.city_id === addressForm.city_id;
+    if (addressForm.region_id) {
+      const city = cities.find(c => String(c.id) === String(d.city_id));
+      return city && String(city.region_id) === String(addressForm.region_id);
+    }
+    return true;
+  });
   if (!customerToken) return <main className="container"><section className="panel"><h2>حساب العميلة</h2><p className="empty">سجلي الدخول برقم الجوال لعرض طلباتك وعناوينك المحفوظة.</p><form className="track" onSubmit={requestOtp}><input value={authPhone} onChange={e=>setAuthPhone(e.target.value)} placeholder="05xxxxxxxx"/><button className="primary">إرسال رمز التحقق</button></form><form className="track" onSubmit={verifyOtp}><input value={otp} onChange={e=>setOtp(e.target.value)} placeholder="رمز التحقق"/><button className="primary">دخول</button></form></section></main>;
   return <main className="container"><section className="panel"><h2>حساب العميلة</h2><p>مرحباً {customer?.name || customer?.phone}</p><button onClick={logoutCustomer}>تسجيل خروج</button></section><section className="panel"><h2>طلباتي</h2>{bookings.length ? bookings.map(b=><div className="bookingCard" key={b.id}><div><b>{b.booking_number || b.id}</b><span>{statusLabel(b.status)}</span></div><p>{b.service_name || '-'} • {fmtDate(b.booking_date)} {shortTime(b.booking_time)}</p><p>{b.region_name || '-'} / {b.city_name || '-'} / {b.district_name || '-'}</p></div>) : <p className="empty">لا توجد طلبات في الحساب.</p>}</section><section className="panel"><h2>العناوين المحفوظة</h2>{addresses.map(a=><div className="bookingCard" key={a.id}><b>{a.label}</b><p>{a.region_name||'-'} / {a.city_name||'-'} / {a.district_name||'-'}</p><p>{a.address}</p></div>)}<form className="bookingGrid" onSubmit={saveAddress}><Field label="اسم العنوان"><Input value={addressForm.label} onChange={v=>setAddressForm({...addressForm,label:v})}/></Field><Field label="المنطقة"><Select value={addressForm.region_id} onChange={v=>setAddressForm({...addressForm,region_id:v,city_id:'',district_id:''})}><OptionList items={regions}/></Select></Field><Field label="المدينة"><Select value={addressForm.city_id} onChange={v=>setAddressForm({...addressForm,city_id:v,district_id:''})}><OptionList items={filteredCities}/></Select></Field><Field label="الحي"><Select value={addressForm.district_id} onChange={v=>setAddressForm({...addressForm,district_id:v})}><OptionList items={filteredDistricts}/></Select></Field><Field label="العنوان التفصيلي"><Input required value={addressForm.address} onChange={v=>setAddressForm({...addressForm,address:v})}/></Field><button className="primary">حفظ العنوان</button></form></section></main>;
 }

@@ -5,10 +5,17 @@ node_modules/
 # Environment files
 .env
 .env.*
+!.env.example
+!**/.env.example
 backend/.env
 backend/.env.*
 admin-dashboard/.env
 admin-dashboard/.env.*
+customer-web/.env
+customer-web/.env.*
+!backend/.env.example
+!admin-dashboard/.env.example
+!customer-web/.env.example
 mobile-app/.env
 mobile-app/.env.*
 
@@ -51,3 +58,9 @@ Thumbs.db
 # Backups / temp
 *.bak
 *.tmp
+
+# Android release signing - never commit these
+mobile-app/android/key.properties
+mobile-app/android/app/upload-keystore.jks
+**/*.jks
+**/*.keystore
