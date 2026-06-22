@@ -728,20 +728,48 @@ async function authenticateAdmin(req, res, next) {
 
 app.post('/api/admin/login', async (req, res) => {
   try {
-    const email = String(req.body.email || '').trim().toLowerCase();
-    const password = String(req.body.password || '');
-    if (!email || !password) return res.status(400).json({ error: 'Email and password are required' });
-    const recentFailures = await query(`SELECT COUNT(*)::int AS count FROM auth_login_attempts WHERE identity=$1 AND succeeded=FALSE AND created_at > NOW()-INTERVAL '15 minutes'`, [email]);
-    if (recentFailures.rows[0].count >= 8) return res.status(429).json({ error: 'Too many login attempts. Try again later.' });
-    const result = await query(`SELECT * FROM admin_users WHERE email=$1 AND status='active' LIMIT 1`, [email]);
-    const user = result.rows[0];
-    const ok = user ? await bcrypt.compare(password, user.password_hash) : false;
-    await query(`INSERT INTO auth_login_attempts (identity,ip_address,succeeded) VALUES ($1,$2,$3)`, [email, req.ip, ok]);
-    if (!ok) return res.status(401).json({ error: 'Invalid login details' });
-    const token = signAdminToken(user);
-    res.json({ ok: true, token, user: { id: user.id, name: user.name, email: user.email, role: user.role } });
+    const inputEmail = String(req.body?.email || '').trim().toLowerCase();
+    const inputPassword = String(req.body?.password || '');
+
+    const adminEmail = String(process.env.ADMIN_EMAIL || '').trim().toLowerCase();
+    const adminPassword = String(process.env.ADMIN_PASSWORD || '');
+
+    if (!adminEmail || !adminPassword || !process.env.JWT_SECRET) {
+      return res.status(500).json({
+        error: 'Admin login is not configured'
+      });
+    }
+
+    if (inputEmail !== adminEmail || inputPassword !== adminPassword) {
+      return res.status(401).json({
+        error: 'Invalid login details'
+      });
+    }
+
+    const token = jwt.sign(
+      {
+        role: 'admin',
+        email: adminEmail
+      },
+      process.env.JWT_SECRET,
+      {
+        expiresIn: '12h'
+      }
+    );
+
+    res.json({
+      ok: true,
+      token,
+      user: {
+        email: adminEmail,
+        role: 'admin'
+      }
+    });
   } catch (error) {
-    res.status(500).json({ error: 'Failed to login', details: error.message });
+    res.status(500).json({
+      error: 'Failed to login',
+      details: error.message
+    });
   }
 });
 
