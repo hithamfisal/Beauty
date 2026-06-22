@@ -2973,8 +2973,8 @@ function CatalogPanel({ catalog, api, load, setMessage }) {
     [city, setCity] = useState(emptyCity),
     [district, setDistrict] = useState(emptyDistrict);
   const [edit, setEdit] = useState({});
-  const [selectedRegionId, setSelectedRegionId] = useState("");
-  const [selectedCityId, setSelectedCityId] = useState("");
+  const selectedRegionId = city.region_id || "";
+  const selectedCityId = district.city_id || "";
   const visibleCities = catalogCities.filter(
     (c) => !selectedRegionId || sameId(c.region_id, selectedRegionId),
   );
@@ -2984,8 +2984,8 @@ function CatalogPanel({ catalog, api, load, setMessage }) {
   const visibleDistricts = catalogDistricts.filter((d) => {
     if (selectedCityId) return sameId(d.city_id, selectedCityId);
     if (selectedRegionId) {
-      const city = catalogCities.find((c) => sameId(c.id, d.city_id));
-      return city && sameId(city.region_id, selectedRegionId);
+      const cityForDistrict = catalogCities.find((c) => sameId(c.id, d.city_id));
+      return cityForDistrict && sameId(cityForDistrict.region_id, selectedRegionId);
     }
     return true;
   });
@@ -3053,27 +3053,15 @@ function CatalogPanel({ catalog, api, load, setMessage }) {
         </div>
         <div>
           <h3>المدن</h3>
-          <Field label="فلترة حسب المنطقة">
-            <Select
-              value={selectedRegionId}
-              onChange={(v) => {
-                setSelectedRegionId(v);
-                setSelectedCityId("");
-                setCity((prev) => ({
-                  ...prev,
-                  region_id: v || prev.region_id,
-                }));
-              }}
-            >
-              <OptionList items={catalogRegions} empty="كل المناطق" />
-            </Select>
-          </Field>
           <Field label="المنطقة للمدينة">
             <Select
               value={city.region_id}
-              onChange={(v) => setCity({ ...city, region_id: v })}
+              onChange={(v) => {
+                setCity({ ...city, region_id: v });
+                setDistrict((prev) => ({ ...prev, city_id: "" }));
+              }}
             >
-              <OptionList items={catalogRegions} />
+              <OptionList items={catalogRegions} empty="كل المناطق" />
             </Select>
           </Field>
           <Field label="اسم عربي">
@@ -3101,7 +3089,7 @@ function CatalogPanel({ catalog, api, load, setMessage }) {
             sub="region_name"
             onEdit={(x) => {
               setCity({ ...emptyCity, ...x });
-              setSelectedRegionId(x.region_id || "");
+              setDistrict((prev) => ({ ...prev, city_id: "" }));
               setEdit({ cities: x.id });
             }}
             onDel={(x) => del("cities", x.id, "المدينة")}
@@ -3109,29 +3097,12 @@ function CatalogPanel({ catalog, api, load, setMessage }) {
         </div>
         <div>
           <h3>الأحياء</h3>
-          <Field label="فلترة المدن حسب المنطقة">
-            <Select
-              value={selectedRegionId}
-              onChange={(v) => {
-                setSelectedRegionId(v);
-                setSelectedCityId("");
-                setDistrict((prev) => ({ ...prev, city_id: "" }));
-              }}
-            >
-              <OptionList items={catalogRegions} empty="كل المناطق" />
-            </Select>
-          </Field>
-          <Field label="فلترة الأحياء حسب المدينة">
-            <Select value={selectedCityId} onChange={setSelectedCityId}>
-              <OptionList items={cityOptionsForDistrict} empty="كل المدن" />
-            </Select>
-          </Field>
           <Field label="المدينة للحي">
             <Select
               value={district.city_id}
               onChange={(v) => setDistrict({ ...district, city_id: v })}
             >
-              <OptionList items={cityOptionsForDistrict} />
+              <OptionList items={cityOptionsForDistrict} empty="كل المدن" />
             </Select>
           </Field>
           <Field label="اسم عربي">
@@ -3160,8 +3131,11 @@ function CatalogPanel({ catalog, api, load, setMessage }) {
             items={visibleDistricts}
             sub="city_name"
             onEdit={(x) => {
+              const selectedCity = catalogCities.find((c) => sameId(c.id, x.city_id));
               setDistrict({ ...emptyDistrict, ...x });
-              setSelectedCityId(x.city_id || "");
+              if (selectedCity?.region_id) {
+                setCity((prev) => ({ ...prev, region_id: selectedCity.region_id }));
+              }
               setEdit({ districts: x.id });
             }}
             onDel={(x) => del("districts", x.id, "الحي")}
@@ -3187,11 +3161,9 @@ function ServicesPanel({ catalog, api, refreshServiceCatalog, setMessage }) {
   const [cat, setCat] = useState(emptyCategory),
     [service, setService] = useState(emptyService),
     [edit, setEdit] = useState({});
-  const [selectedCategoryId, setSelectedCategoryId] = useState("");
+  const selectedCategoryId = service.category_id || "";
   const visibleServices = catalogServices.filter(
-    (s) =>
-      !selectedCategoryId ||
-      sameId(s.category_id, selectedCategoryId),
+    (s) => !selectedCategoryId || sameId(s.category_id, selectedCategoryId),
   );
   async function save(path, form, reset) {
     try {
@@ -3260,7 +3232,7 @@ function ServicesPanel({ catalog, api, refreshServiceCatalog, setMessage }) {
             items={serviceCategories}
             onEdit={(x) => {
               setCat({ ...emptyCategory, ...x });
-              setSelectedCategoryId(x.id);
+              setService((prev) => ({ ...prev, category_id: x.id }));
               setEdit({ "service-categories": x.id });
             }}
             onDel={(x) => del("service-categories", x.id, "القسم")}
@@ -3268,26 +3240,12 @@ function ServicesPanel({ catalog, api, refreshServiceCatalog, setMessage }) {
         </div>
         <div>
           <h3>الخدمات</h3>
-          <Field label="فلترة الخدمات حسب القسم">
-            <Select
-              value={selectedCategoryId}
-              onChange={(v) => {
-                setSelectedCategoryId(v);
-                setService((prev) => ({
-                  ...prev,
-                  category_id: v || prev.category_id,
-                }));
-              }}
-            >
-              <OptionList items={serviceCategories} empty="كل الأقسام" />
-            </Select>
-          </Field>
           <Field label="القسم للخدمة">
             <Select
               value={service.category_id}
               onChange={(v) => setService({ ...service, category_id: v })}
             >
-              <OptionList items={serviceCategories} empty="اختر القسم" />
+              <OptionList items={serviceCategories} empty="كل الأقسام" />
             </Select>
           </Field>
           <Field label="اسم عربي">
@@ -3343,7 +3301,6 @@ function ServicesPanel({ catalog, api, refreshServiceCatalog, setMessage }) {
             sub="category_name"
             onEdit={(x) => {
               setService({ ...emptyService, ...x });
-              setSelectedCategoryId(x.category_id || "");
               setEdit({ services: x.id });
             }}
             onDel={(x) => del("services", x.id, "الخدمة")}
