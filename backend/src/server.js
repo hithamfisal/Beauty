@@ -7,6 +7,10 @@ import { ApiValidationError, assertUuid, uniqueUuidArray, validateBookingShape, 
 import jwt from 'jsonwebtoken';
 import bcrypt from 'bcryptjs';
 import { randomInt } from 'node:crypto';
+import { spawn } from 'node:child_process';
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 dotenv.config();
 
@@ -18,6 +22,9 @@ const CUSTOMER_OTP_TEST_MODE = !IS_PRODUCTION || CUSTOMER_OTP_DEV_MODE;
 const JWT_SECRET = process.env.JWT_SECRET || (IS_PRODUCTION ? '' : 'beauty-home-service-local-secret');
 const DEFAULT_ADMIN_EMAIL = process.env.ADMIN_EMAIL || 'admin@beauty.local';
 const DEFAULT_ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'Beauty@12345';
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const BACKUP_DIR = process.env.BACKUP_DIR || path.resolve(__dirname, '..', 'backups');
 
 if (IS_PRODUCTION && JWT_SECRET.length < 32) throw new Error('JWT_SECRET must be configured with at least 32 characters in production.');
 if (IS_PRODUCTION && (!process.env.ADMIN_EMAIL || !process.env.ADMIN_PASSWORD || process.env.ADMIN_PASSWORD.length < 12)) {
@@ -1020,9 +1027,113 @@ app.post('/api/bookings', async (req, res) => {
   }
 });
 
+
+function getPgDumpExecutable() {
+  return process.env.PG_DUMP_PATH || (process.env.POSTGRES_BIN ? path.join(process.env.POSTGRES_BIN, process.platform === 'win32' ? 'pg_dump.exe' : 'pg_dump') : 'pg_dump');
+}
+
+function buildBackupFileName(source) {
+  const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+  return `beauty_${source}_backup_${timestamp}.sql`;
+}
+
+async function ensureBackupDir() {
+  await fs.mkdir(BACKUP_DIR, { recursive: true });
+}
+
+async function runPgDump(connectionString, source) {
+  if (!connectionString) {
+    const label = source === 'supabase' ? 'SUPABASE_DATABASE_URL' : 'LOCAL_DATABASE_URL أو DATABASE_URL';
+    const error = new Error(`${label} غير موجود في ملف البيئة.`);
+    error.statusCode = 400;
+    throw error;
+  }
+  await ensureBackupDir();
+  const fileName = buildBackupFileName(source);
+  const filePath = path.join(BACKUP_DIR, fileName);
+  const pgDump = getPgDumpExecutable();
+  const args = ['--format=plain', '--no-owner', '--no-privileges', '--encoding=UTF8', '--file', filePath, connectionString];
+
+  await new Promise((resolve, reject) => {
+    const child = spawn(pgDump, args, { windowsHide: true });
+    let stderr = '';
+    child.stderr.on('data', chunk => { stderr += chunk.toString(); });
+    child.on('error', error => {
+      const message = error.code === 'ENOENT'
+        ? `لم يتم العثور على pg_dump. أضف PG_DUMP_PATH في ملف .env مثل: C:\\Program Files\\PostgreSQL\\18\\bin\\pg_dump.exe`
+        : error.message;
+      reject(new Error(message));
+    });
+    child.on('close', code => {
+      if (code === 0) return resolve();
+      reject(new Error(stderr.trim() || `pg_dump failed with exit code ${code}`));
+    });
+  });
+
+  const stat = await fs.stat(filePath);
+  return { fileName, filePath, size_bytes: stat.size, created_at: stat.mtime.toISOString() };
+}
+
+async function listBackupFiles() {
+  await ensureBackupDir();
+  const entries = await fs.readdir(BACKUP_DIR, { withFileTypes: true });
+  const files = [];
+  for (const entry of entries) {
+    if (!entry.isFile() || !/^beauty_(local|supabase)_backup_.*\.sql$/i.test(entry.name)) continue;
+    const filePath = path.join(BACKUP_DIR, entry.name);
+    const stat = await fs.stat(filePath);
+    files.push({
+      file_name: entry.name,
+      source: entry.name.startsWith('beauty_supabase_') ? 'supabase' : 'local',
+      size_bytes: stat.size,
+      created_at: stat.mtime.toISOString()
+    });
+  }
+  return files.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+}
+
 app.use('/api/admin', (req, res, next) => {
   if (req.path === '/login') return next();
   return authenticateAdmin(req, res, next);
+});
+
+app.get('/api/admin/backups', async (req, res) => {
+  try {
+    const files = await listBackupFiles();
+    res.json({ ok: true, backup_dir: BACKUP_DIR, files });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to list backups', details: error.message });
+  }
+});
+
+app.post('/api/admin/backups/local', async (req, res) => {
+  try {
+    const backup = await runPgDump(process.env.LOCAL_DATABASE_URL || process.env.DATABASE_URL, 'local');
+    res.json({ ok: true, ...backup, download_url: `/api/admin/backups/download/${encodeURIComponent(backup.fileName)}` });
+  } catch (error) {
+    res.status(error.statusCode || 500).json({ error: 'Failed to create local backup', details: error.message });
+  }
+});
+
+app.post('/api/admin/backups/supabase', async (req, res) => {
+  try {
+    const backup = await runPgDump(process.env.SUPABASE_DATABASE_URL, 'supabase');
+    res.json({ ok: true, ...backup, download_url: `/api/admin/backups/download/${encodeURIComponent(backup.fileName)}` });
+  } catch (error) {
+    res.status(error.statusCode || 500).json({ error: 'Failed to create Supabase backup', details: error.message });
+  }
+});
+
+app.get('/api/admin/backups/download/:fileName', async (req, res) => {
+  try {
+    const fileName = path.basename(req.params.fileName || '');
+    if (!/^beauty_(local|supabase)_backup_.*\.sql$/i.test(fileName)) return res.status(400).json({ error: 'Invalid backup file name' });
+    const filePath = path.join(BACKUP_DIR, fileName);
+    await fs.access(filePath);
+    res.download(filePath, fileName);
+  } catch (error) {
+    res.status(404).json({ error: 'Backup file not found', details: error.message });
+  }
 });
 
 app.get('/api/admin/dashboard', async (req, res) => {

@@ -5,6 +5,10 @@ import {
   BarChart3,
   CalendarDays,
   ChevronDown,
+  Cloud,
+  Database,
+  Download,
+  HardDrive,
   ClipboardList,
   CreditCard,
   Images,
@@ -229,6 +233,14 @@ const adminNavigation = [
       },
       { id: "beautician-portfolio", label: "معرض الأعمال", icon: Images },
       { id: "customer-reviews", label: "تقييمات العملاء", icon: Star },
+    ],
+  },
+  {
+    id: "system",
+    label: "مدير النظام",
+    icon: Database,
+    items: [
+      { id: "database-backup", label: "النسخ الاحتياطي", icon: Database },
     ],
   },
   {
@@ -553,6 +565,9 @@ function App() {
   const [availabilityCityFilter, setAvailabilityCityFilter] = useState("");
   const [activeView, setActiveView] = useState("overview");
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  const [backups, setBackups] = useState([]);
+  const [backupStatus, setBackupStatus] = useState("");
+  const [backupLoading, setBackupLoading] = useState("");
 
   async function api(path, options = {}) {
     const headers = {
@@ -608,6 +623,56 @@ function App() {
       setMessage(`خطأ تحميل البيانات: ${e.message}`);
     }
   }
+  async function loadBackups() {
+    try {
+      const data = await api("/admin/backups");
+      setBackups(Array.isArray(data?.files) ? data.files : []);
+    } catch (e) {
+      setBackupStatus(`تعذر تحميل قائمة النسخ: ${e.message}`);
+    }
+  }
+
+  async function createBackup(source) {
+    const label = source === "supabase" ? "Supabase السحابي" : "المحلي";
+    if (!confirm(`سيتم إنشاء نسخة احتياطية من قاعدة البيانات ${label}. هل تريد المتابعة؟`)) return;
+    setBackupLoading(source);
+    setBackupStatus(`جاري إنشاء نسخة احتياطية من قاعدة البيانات ${label}...`);
+    try {
+      const data = await api(`/admin/backups/${source}`, { method: "POST" });
+      await loadBackups();
+      setBackupStatus(`تم إنشاء النسخة بنجاح: ${data.fileName}`);
+      downloadBackup(data.fileName);
+    } catch (e) {
+      setBackupStatus(`فشل إنشاء النسخة: ${e.message}`);
+    } finally {
+      setBackupLoading("");
+    }
+  }
+
+  async function downloadBackup(fileName) {
+    if (!fileName) return;
+    try {
+      const res = await fetch(`${API}/admin/backups/download/${encodeURIComponent(fileName)}`, {
+        headers: adminToken ? { Authorization: `Bearer ${adminToken}` } : {},
+      });
+      if (!res.ok) {
+        const text = await res.text();
+        throw new Error(text?.slice(0, 250) || "تعذر تحميل الملف");
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = fileName;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      setBackupStatus(`تعذر تحميل النسخة: ${e.message}`);
+    }
+  }
+
   async function refreshServiceCatalog() {
     const [categories, services] = await Promise.all([
       api("/admin/service-categories?all=1"),
@@ -623,6 +688,10 @@ function App() {
   useEffect(() => {
     if (adminToken) load();
   }, [adminToken]);
+
+  useEffect(() => {
+    if (adminToken && activeView === "database-backup") loadBackups();
+  }, [adminToken, activeView]);
 
   async function login(e) {
     e.preventDefault();
@@ -1333,6 +1402,18 @@ function App() {
               استيراد بيانات السعودية الجاهزة من GitHub
             </button>
           </section>
+        )}
+
+
+        {activeView === "database-backup" && (
+          <BackupPanel
+            backups={backups}
+            backupStatus={backupStatus}
+            backupLoading={backupLoading}
+            createBackup={createBackup}
+            loadBackups={loadBackups}
+            downloadBackup={downloadBackup}
+          />
         )}
 
         {activeView === "booking-create" && (
@@ -2955,6 +3036,74 @@ function BookingDetailsModal({
         </div>
       </div>
     </div>
+  );
+}
+
+
+function formatBytes(bytes) {
+  const n = Number(bytes || 0);
+  if (!n) return "0 KB";
+  if (n < 1024 * 1024) return `${Math.round(n / 1024)} KB`;
+  return `${(n / (1024 * 1024)).toFixed(2)} MB`;
+}
+
+function BackupPanel({ backups, backupStatus, backupLoading, createBackup, loadBackups, downloadBackup }) {
+  const list = Array.isArray(backups) ? backups : [];
+  return (
+    <section className="panel backup-panel">
+      <h2>النسخ الاحتياطي لقاعدة البيانات</h2>
+      <p className="muted">
+        إنشاء نسخة SQL من قاعدة البيانات المحلية أو قاعدة Supabase السحابية وحفظها في مجلد backups على السيرفر مع تحميلها على الجهاز.
+      </p>
+      <div className="backup-actions">
+        <button disabled={!!backupLoading} onClick={() => createBackup("local")}>
+          <HardDrive size={18} />
+          {backupLoading === "local" ? "جاري النسخ..." : "نسخة احتياطية من المحلي"}
+        </button>
+        <button disabled={!!backupLoading} onClick={() => createBackup("supabase")}>
+          <Cloud size={18} />
+          {backupLoading === "supabase" ? "جاري النسخ..." : "نسخة احتياطية من Supabase"}
+        </button>
+        <button className="secondary" disabled={!!backupLoading} onClick={loadBackups}>
+          <RefreshCw size={18} /> تحديث القائمة
+        </button>
+      </div>
+      {backupStatus && <div className="message">{backupStatus}</div>}
+      <div className="backup-note">
+        <b>مهم:</b> بيانات الاتصال وكلمات المرور يجب أن تكون داخل ملف backend/.env فقط، ولا يتم وضعها داخل واجهة React.
+      </div>
+      <div className="tableWrap">
+        <table>
+          <thead>
+            <tr>
+              <th>المصدر</th>
+              <th>اسم الملف</th>
+              <th>الحجم</th>
+              <th>تاريخ الإنشاء</th>
+              <th>تحميل</th>
+            </tr>
+          </thead>
+          <tbody>
+            {list.length === 0 && (
+              <tr><td colSpan="5">لا توجد نسخ احتياطية محفوظة حالياً.</td></tr>
+            )}
+            {list.map((file) => (
+              <tr key={file.file_name}>
+                <td>{file.source === "supabase" ? "Supabase" : "محلي"}</td>
+                <td dir="ltr">{file.file_name}</td>
+                <td>{formatBytes(file.size_bytes)}</td>
+                <td>{formatDate(file.created_at)}</td>
+                <td>
+                  <button className="secondary" onClick={() => downloadBackup(file.file_name)}>
+                    <Download size={16} /> تحميل
+                  </button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </section>
   );
 }
 

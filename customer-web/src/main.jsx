@@ -117,7 +117,7 @@ function TextArea(props) { return <textarea {...props} onChange={e => props.onCh
 function OptionList({ items, empty }) {
   return <><option value="">{empty || 'اختر'}</option>{items.map(x => <option key={x.id} value={x.id}>{label(x)}</option>)}</>;
 }
-function Field({ label, children }) { return <label className="field"><span>{label}</span>{children}</label>; }
+function Field({ label, children, className = "" }) { return <label className={`field ${className}`.trim()}><span>{label}</span>{children}</label>; }
 
 function App() {
   const [tab, setTab] = useState('home');
@@ -428,9 +428,23 @@ function CustomerAccessStrip({ customerToken, customer, bookingMode, setBookingM
 }
 
 function Home({ categories, portfolio, beauticians, setTab, openBeautician }) {
-  const previewCategories = categories.slice(0, 10);
-  const serviceIcons = [<Scissors/>, <Palette/>, <Sparkles/>, <Heart/>];
+  const previewCategories = categories.slice(0, 8);
+  const serviceIcons = [<Scissors size={24}/>, <Palette size={24}/>, <Sparkles size={24}/>, <Heart size={24}/>];
   return <main className="container homeLayout">
+    <section className="homeShowcase">
+      <div className="homeWelcome">
+        <span className="eyebrow">Luxury Soft Beauty</span>
+        <h2>جمالكِ في بيتك بخطوات حجز واضحة وناعمة</h2>
+        <p>اختاري القسم، الخدمة، الموعد، والموقع. بعد إرسال الطلب يتواصل معك فريق الدعم لتأكيد توفر الخبيرة والموعد.</p>
+        <div className="homeSearch"><input placeholder="ابحثي عن حناء، مكياج، شعر، أظافر..."/><button className="primary" onClick={() => setTab('booking')}><Search size={18}/> حجز سريع</button></div>
+      </div>
+      <div className="homeAside">
+        <div className="miniFeature"><CalendarDays/><div><b>رحلة حجز مختصرة</b><p>بيانات العميلة، الخدمة، الموعد، ثم ملخص الطلب.</p></div></div>
+        <div className="miniFeature"><UserCheck/><div><b>خبيرات تجميل</b><p>عرض الأعمال والتقييمات قبل اختيار الخبيرة المناسبة.</p></div></div>
+        <div className="miniFeature"><MessageCircle/><div><b>تأكيد عبر الدعم</b><p>فريق الدعم يتواصل لتأكيد التوفر والموقع.</p></div></div>
+      </div>
+    </section>
+
     <section className="dashStats">
       <Card icon={<Scissors/>} title="Service Sections" sub="أقسام الخدمات" value={categories.length}/>
       <Card icon={<UserCheck/>} title="Beauty Experts" sub="خبيرات متاحات" value={beauticians.length}/>
@@ -438,17 +452,17 @@ function Home({ categories, portfolio, beauticians, setTab, openBeautician }) {
     </section>
 
     <section className="panel servicePanel">
-      <div className="sectionTitle"><div><small>اختاري القسم المناسب</small><h2>أقسام الخدمات</h2></div><button className="linkBtn" onClick={() => setTab('booking')}>ابدئي الحجز <ChevronRight size={16}/></button></div>
-      <div className="serviceChips">{previewCategories.map((c, i) => <button key={c.id} onClick={() => setTab('booking')}><span>{serviceIcons[i % serviceIcons.length]}</span>{label(c)}</button>)}</div>
+      <div className="sectionTitle"><div><small>Categories</small><h2>أقسام الخدمات</h2></div><button className="linkBtn" onClick={() => setTab('booking')}>عرض كل الخدمات <ChevronRight size={16}/></button></div>
+      <div className="categoryGrid">{previewCategories.map((c, i) => <button className="categoryCard" key={c.id} onClick={() => setTab('booking')}><span>{serviceIcons[i % serviceIcons.length]}</span><b>{label(c)}</b><small>اختاري القسم للانتقال إلى الحجز</small></button>)}</div>
     </section>
 
     <section className="panel portfolioPanel">
-      <div className="sectionTitle"><div><small>شاهدي قبل الاختيار</small><h2>نماذج مميزة من أعمال الخبيرات</h2></div><button className="linkBtn" onClick={() => setTab('beauticians')}>عرض الخبيرات <ChevronRight size={16}/></button></div>
+      <div className="sectionTitle"><div><small>Featured Work</small><h2>نماذج مميزة من أعمال الخبيرات</h2></div><button className="linkBtn" onClick={() => setTab('beauticians')}>عرض الخبيرات <ChevronRight size={16}/></button></div>
       <PortfolioGrid items={portfolio.slice(0,4)} compact />
     </section>
 
     <section className="panel expertStrip">
-      <div className="sectionTitle"><div><small>اختيار سريع</small><h2>خبيرات مميزات</h2></div></div>
+      <div className="sectionTitle"><div><small>Recommended Experts</small><h2>خبيرات مميزات</h2></div></div>
       <BeauticianGrid items={beauticians.slice(0,3)} openBeautician={openBeautician} compact />
     </section>
   </main>
@@ -458,29 +472,51 @@ function BookingForm({ booking, setBookingField, regions, cities, districts, cat
   const selectedService = services.find(s => s.id === booking.service_id);
   const usingAccount = bookingMode === 'account' && customerToken && customer;
   const needAccountLogin = bookingMode === 'account' && !customerToken;
-  return <main className="container"><section className="panel"><h2>طريقة الحجز</h2><div className="modeCards"><button type="button" className={bookingMode === 'account' ? 'mode active' : 'mode'} onClick={()=>setBookingMode('account')}>تسجيل / دخول برقم الهاتف</button><button type="button" className={bookingMode === 'guest' ? 'mode active' : 'mode'} onClick={()=>setBookingMode('guest')}>المتابعة كضيف</button></div>{usingAccount && <div className="accountNotice">تم الدخول كـ <b>{customer?.name || customer?.phone}</b>. سيتم تعبئة الاسم ورقم الجوال والعنوان الافتراضي تلقائياً إن وجد.</div>}{needAccountLogin && <form className="inlineAuth" onSubmit={verifyOtp}><Input value={authName} onChange={setAuthName} placeholder="اسم العميلة للتسجيل أول مرة"/><PhoneInput value={authPhone} onChange={setAuthPhone}/><button type="button" onClick={requestOtp}>إرسال الرمز</button><Input value={otp} onChange={setOtp} placeholder="رمز التحقق"/><button className="primary">دخول</button><small>يمكنك أيضاً اختيار المتابعة كضيف وإدخال البيانات داخل الطلب.</small></form>}</section><section className="panel"><h2>طلب حجز</h2><form className="bookingGrid" onSubmit={submitBooking}>
-    <Field label="اسم العميلة"><Input required disabled={usingAccount} value={booking.customer_name} onChange={v=>setBookingField('customer_name',v)} placeholder={usingAccount ? 'من بيانات الحساب' : 'الاسم'} /></Field>
-    <Field label="رقم الجوال"><PhoneInput required disabled={usingAccount} value={booking.phone} onChange={v=>setBookingField('phone',v)} placeholder={usingAccount ? 'من بيانات الحساب' : PHONE_PLACEHOLDER} /></Field>
-    <Field label="المنطقة"><Select value={booking.region_id} onChange={v=>setBookingField('region_id',v)}><OptionList items={regions} empty="كل المناطق / اختاري المنطقة" /></Select></Field>
-    <Field label="المدينة"><Select value={booking.city_id} onChange={v=>setBookingField('city_id',v)}><OptionList items={cities} empty={booking.region_id ? "مدن المنطقة المختارة" : "كل المدن / اختاري المدينة"} /></Select></Field>
-    <Field label="الحي"><Select value={booking.district_id} onChange={v=>setBookingField('district_id',v)}><OptionList items={districts} empty={booking.city_id ? "أحياء المدينة المختارة" : booking.region_id ? "أحياء المنطقة المختارة" : "كل الأحياء / اختاري الحي"} /></Select></Field>
-    <Field label="قسم الخدمة"><Select value={booking.service_category_id} onChange={v=>setBookingField('service_category_id',v)}><OptionList items={categories} empty="كل الأقسام" /></Select></Field>
-    <Field label="الخدمة"><Select required value={booking.service_id} onChange={v=>setBookingField('service_id',v)}><OptionList items={services} empty={booking.service_category_id ? "خدمات القسم المختار" : "كل الخدمات / اختاري الخدمة"} /></Select></Field>
-    <Field label="نوع المناسبة"><Input value={booking.event_type} onChange={v=>setBookingField('event_type',v)} /></Field>
-    <Field label="التاريخ"><Input required type="date" value={booking.booking_date} onChange={v=>setBookingField('booking_date',v)} /></Field>
-    <Field label="الوقت"><Input required type="time" value={booking.booking_time} onChange={v=>setBookingField('booking_time',v)} /></Field>
-    <Field label="وقت بديل"><Input type="time" value={booking.alternate_time} onChange={v=>setBookingField('alternate_time',v)} /></Field>
-    <Field label="عدد الأشخاص"><Input type="number" min="1" value={booking.people_count} onChange={v=>setBookingField('people_count',v)} /></Field>
-    <Field label="طريقة التواصل"><Select value={booking.contact_preference} onChange={v=>setBookingField('contact_preference',v)}><option value="whatsapp">واتساب</option><option value="call">اتصال</option><option value="sms">رسالة SMS</option></Select></Field>
-    <Field label="خبيرة مفضلة"><Select value={booking.preferred_artist_id} onChange={v=>setBookingField('preferred_artist_id',v)}><option value="">اترك الاختيار للدعم</option>{beauticians.map(b=><option key={b.id} value={b.id}>{b.name} {b.review_rating ? `⭐ ${b.review_rating}` : ''}{b.is_fallback ? ' - اختيار عام' : ''}</option>)}</Select></Field>
-    <Field label="العنوان"><Input required value={booking.address} onChange={v=>setBookingField('address',v)} placeholder="تفاصيل العنوان" /></Field>
-    <Field label="صورة التصميم"><input type="file" accept="image/*" onChange={e=>uploadImage(e.target.files?.[0])}/>{booking.design_image_url && <small>تم إرفاق الصورة</small>}</Field>
-    <Field label="ملاحظات"><TextArea value={booking.customer_notes} onChange={v=>setBookingField('customer_notes',v)} placeholder="أي تفاصيل إضافية" /></Field>
-    <div className="summary"><b>{selectedService ? label(selectedService) : 'الخدمة'}</b><span>{selectedService ? [money(selectedService.min_price), money(selectedService.max_price)].filter(Boolean).join(' - ') : 'اختاري الخدمة لمعرفة التفاصيل'}</span></div>
-    <button className="primary submit" type="submit" disabled={needAccountLogin}>إرسال الطلب</button>
-  </form></section>
-  <section className="panel"><h2>نماذج مرتبطة بالخدمة</h2><PortfolioGrid items={portfolio.slice(0,8)} /></section>
-  <section className="panel"><h2>خبيرات مناسبات</h2><BeauticianGrid items={beauticians.slice(0,8)} openBeautician={openBeautician} /></section></main>
+  return <main className="container">
+    <section className="panel bookingHero">
+      <div>
+        <span className="eyebrow">Booking Journey</span>
+        <h2>طلب حجز خدمة تجميل منزلية</h2>
+        <p>تم تنظيم الحجز على خطوات واضحة حتى تكون التجربة خفيفة وسريعة للعميلة.</p>
+      </div>
+      <button className="linkBtn" type="button">سيتم تأكيد الموعد بواسطة الدعم</button>
+    </section>
+
+    <section className="panel">
+      <div className="sectionTitle"><div><small>Account Mode</small><h2>طريقة الحجز</h2></div></div>
+      <div className="modeCards"><button type="button" className={bookingMode === 'account' ? 'mode active' : 'mode'} onClick={()=>setBookingMode('account')}>تسجيل / دخول برقم الهاتف</button><button type="button" className={bookingMode === 'guest' ? 'mode active' : 'mode'} onClick={()=>setBookingMode('guest')}>المتابعة كضيف</button></div>
+      {usingAccount && <div className="accountNotice">تم الدخول كـ <b>{customer?.name || customer?.phone}</b>. سيتم تعبئة الاسم ورقم الجوال والعنوان الافتراضي تلقائياً إن وجد.</div>}
+      {needAccountLogin && <form className="inlineAuth" onSubmit={verifyOtp}><Input value={authName} onChange={setAuthName} placeholder="اسم العميلة للتسجيل أول مرة"/><PhoneInput value={authPhone} onChange={setAuthPhone}/><button type="button" onClick={requestOtp}>إرسال الرمز</button><Input value={otp} onChange={setOtp} placeholder="رمز التحقق"/><button className="primary">دخول</button><small>يمكنك أيضاً اختيار المتابعة كضيف وإدخال البيانات داخل الطلب.</small></form>}
+    </section>
+
+    <section className="panel">
+      <div className="sectionTitle"><div><small>Multi-step Form</small><h2>بيانات الطلب</h2></div></div>
+      <div className="bookingSteps"><span className="stepPill"><b>1</b> بيانات العميلة</span><span className="stepPill"><b>2</b> الخدمة والموقع</span><span className="stepPill"><b>3</b> الموعد والخبيرة</span><span className="stepPill"><b>4</b> ملخص وإرسال</span></div>
+      <form className="bookingGrid" onSubmit={submitBooking}>
+        <Field label="اسم العميلة"><Input required disabled={usingAccount} value={booking.customer_name} onChange={v=>setBookingField('customer_name',v)} placeholder={usingAccount ? 'من بيانات الحساب' : 'الاسم'} /></Field>
+        <Field label="رقم الجوال"><PhoneInput required disabled={usingAccount} value={booking.phone} onChange={v=>setBookingField('phone',v)} placeholder={usingAccount ? 'من بيانات الحساب' : PHONE_PLACEHOLDER} /></Field>
+        <Field label="نوع المناسبة"><Input value={booking.event_type} onChange={v=>setBookingField('event_type',v)} /></Field>
+        <Field label="المنطقة"><Select value={booking.region_id} onChange={v=>setBookingField('region_id',v)}><OptionList items={regions} empty="كل المناطق / اختاري المنطقة" /></Select></Field>
+        <Field label="المدينة"><Select value={booking.city_id} onChange={v=>setBookingField('city_id',v)}><OptionList items={cities} empty={booking.region_id ? "مدن المنطقة المختارة" : "كل المدن / اختاري المدينة"} /></Select></Field>
+        <Field label="الحي"><Select value={booking.district_id} onChange={v=>setBookingField('district_id',v)}><OptionList items={districts} empty={booking.city_id ? "أحياء المدينة المختارة" : booking.region_id ? "أحياء المنطقة المختارة" : "كل الأحياء / اختاري الحي"} /></Select></Field>
+        <Field label="قسم الخدمة"><Select value={booking.service_category_id} onChange={v=>setBookingField('service_category_id',v)}><OptionList items={categories} empty="كل الأقسام" /></Select></Field>
+        <Field label="الخدمة"><Select required value={booking.service_id} onChange={v=>setBookingField('service_id',v)}><OptionList items={services} empty={booking.service_category_id ? "خدمات القسم المختار" : "كل الخدمات / اختاري الخدمة"} /></Select></Field>
+        <Field label="عدد الأشخاص"><Input type="number" min="1" value={booking.people_count} onChange={v=>setBookingField('people_count',v)} /></Field>
+        <Field label="التاريخ"><Input required type="date" value={booking.booking_date} onChange={v=>setBookingField('booking_date',v)} /></Field>
+        <Field label="الوقت"><Input required type="time" value={booking.booking_time} onChange={v=>setBookingField('booking_time',v)} /></Field>
+        <Field label="وقت بديل"><Input type="time" value={booking.alternate_time} onChange={v=>setBookingField('alternate_time',v)} /></Field>
+        <Field label="طريقة التواصل"><Select value={booking.contact_preference} onChange={v=>setBookingField('contact_preference',v)}><option value="whatsapp">واتساب</option><option value="call">اتصال</option><option value="sms">رسالة SMS</option></Select></Field>
+        <Field label="خبيرة مفضلة"><Select value={booking.preferred_artist_id} onChange={v=>setBookingField('preferred_artist_id',v)}><option value="">اترك الاختيار للدعم</option>{beauticians.map(b=><option key={b.id} value={b.id}>{b.name} {b.review_rating ? `⭐ ${b.review_rating}` : ''}{b.is_fallback ? ' - اختيار عام' : ''}</option>)}</Select></Field>
+        <Field label="صورة التصميم"><input type="file" accept="image/*" onChange={e=>uploadImage(e.target.files?.[0])}/>{booking.design_image_url && <small>تم إرفاق الصورة</small>}</Field>
+        <Field label="العنوان" className="wide"><Input required value={booking.address} onChange={v=>setBookingField('address',v)} placeholder="تفاصيل العنوان" /></Field>
+        <Field label="ملاحظات"><TextArea value={booking.customer_notes} onChange={v=>setBookingField('customer_notes',v)} placeholder="أي تفاصيل إضافية" /></Field>
+        <div className="summary"><b>{selectedService ? label(selectedService) : 'ملخص الحجز'}</b><span>{selectedService ? [money(selectedService.min_price), money(selectedService.max_price)].filter(Boolean).join(' - ') : 'اختاري الخدمة لمعرفة السعر المتوقع'}</span><small>{booking.booking_date || 'التاريخ'} • {booking.booking_time || 'الوقت'} • {booking.city_id ? 'تم اختيار المدينة' : 'اختاري المدينة'}</small></div>
+        <button className="primary submit" type="submit" disabled={needAccountLogin}>إرسال الطلب</button>
+      </form>
+    </section>
+    <section className="panel"><div className="sectionTitle"><div><small>Related Portfolio</small><h2>نماذج مرتبطة بالخدمة</h2></div></div><PortfolioGrid items={portfolio.slice(0,8)} /></section>
+    <section className="panel"><div className="sectionTitle"><div><small>Available Experts</small><h2>خبيرات مناسبات</h2></div></div><BeauticianGrid items={beauticians.slice(0,8)} openBeautician={openBeautician} /></section>
+  </main>
 }
 function PortfolioGrid({ items, compact = false }) {
   if (!items.length) return <p className="empty">لا توجد نماذج أعمال منشورة حالياً.</p>;
