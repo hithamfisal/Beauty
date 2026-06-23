@@ -2,10 +2,13 @@ import React, { useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
   Bell,
+  AlertCircle,
   BarChart3,
   CalendarDays,
+  CheckCircle2,
   ChevronDown,
   Cloud,
+  Clock,
   Database,
   Download,
   HardDrive,
@@ -18,6 +21,7 @@ import {
   MapPin,
   Menu,
   MessageCircle,
+  NotebookPen,
   PlusCircle,
   RefreshCw,
   Sparkles,
@@ -25,6 +29,8 @@ import {
   TrendingUp,
   Upload,
   UserRound,
+  Users,
+  Wallet,
   X,
 } from "lucide-react";
 import "./style.css";
@@ -174,6 +180,60 @@ const emptyTemplate = {
   sort_order: 0,
 };
 const contactLabels = { whatsapp: "واتساب", call: "اتصال", sms: "رسالة SMS" };
+
+const bookingWorkflow = [
+  { key: "new", label: "جديد" },
+  { key: "under_review", label: "مراجعة" },
+  { key: "confirmed", label: "مؤكد" },
+  { key: "beautician_assigned", label: "تعيين" },
+  { key: "in_progress", label: "تنفيذ" },
+  { key: "completed", label: "مكتمل" },
+];
+const statusRank = {
+  new: 0,
+  under_review: 1,
+  waiting_customer_confirmation: 1,
+  confirmed: 2,
+  beautician_assigned: 3,
+  artist_assigned: 3,
+  in_progress: 4,
+  completed: 5,
+  cancelled: -1,
+};
+function statusTone(status) {
+  const key = status || "new";
+  if (key === "completed") return "success";
+  if (key === "confirmed" || key === "beautician_assigned" || key === "artist_assigned") return "ready";
+  if (key === "cancelled") return "danger";
+  if (key === "in_progress") return "info";
+  if (key === "under_review" || key === "waiting_customer_confirmation") return "warning";
+  return "new";
+}
+function paymentTone(status) {
+  if (status === "paid") return "success";
+  if (status === "deposit_paid") return "ready";
+  if (status === "refunded") return "info";
+  return "neutral";
+}
+function StatusBadge({ status }) {
+  return <span className={`status-badge tone-${statusTone(status)}`}>{statusLabels[status || "new"] || status || "-"}</span>;
+}
+function PaymentBadge({ status }) {
+  return <span className={`status-badge tone-${paymentTone(status || "unpaid")}`}>{paymentLabels[status || "unpaid"] || status || "-"}</span>;
+}
+function StatusStepper({ status }) {
+  const rank = statusRank[status || "new"] ?? 0;
+  if (status === "cancelled") {
+    return <div className="status-stepper is-cancelled"><span>تم إلغاء الطلب</span></div>;
+  }
+  return (
+    <div className="status-stepper">
+      {bookingWorkflow.map((step, idx) => (
+        <span key={step.key} className={idx <= rank ? "is-done" : ""}>{step.label}</span>
+      ))}
+    </div>
+  );
+}
 
 const adminNavigation = [
   {
@@ -1105,6 +1165,25 @@ function App() {
       setMessage(`تعذر فتح تفاصيل الطلب: ${e.message}`);
     }
   }
+
+  async function addBookingNote(id, note) {
+    const text = String(note || "").trim();
+    if (!text) return setMessage("اكتب الملاحظة الإدارية أولاً.");
+    try {
+      await api(`/admin/bookings/${id}/events`, {
+        method: "POST",
+        body: JSON.stringify({
+          event_type: "admin_note",
+          title: "ملاحظة إدارية",
+          description: text,
+        }),
+      });
+      await refreshBooking(id);
+      setMessage("تم حفظ الملاحظة الإدارية في سجل الطلب.");
+    } catch (e) {
+      setMessage(`تعذر حفظ الملاحظة الإدارية: ${e.message}`);
+    }
+  }
   async function importSaudiOpenData() {
     try {
       const data = await api("/admin/import/saudi-open-data", {
@@ -1317,27 +1396,21 @@ function App() {
             assignBeautician={assignBeautician}
             updatePayment={updatePayment}
             updatePaymentDetails={updatePaymentDetails}
+            addBookingNote={addBookingNote}
             updating={updating}
             close={() => setSelectedBooking(null)}
           />
         )}
         {activeView === "overview" && (
-          <section className="cards">
-            <Card title="كل الطلبات" value={dashboard.total_bookings ?? 0} />
-            <Card title="طلبات جديدة" value={dashboard.new_bookings ?? 0} />
-            <Card title="طلبات اليوم" value={dashboard.today_bookings ?? 0} />
-            <Card
-              title="بدون خبيرة"
-              value={dashboard.unassigned_bookings ?? 0}
-            />
-            <Card title="غير مدفوعة" value={dashboard.unpaid_bookings ?? 0} />
-            <Card
-              title="خبيرات فعالات"
-              value={
-                dashboard.active_beauticians ?? dashboard.active_artists ?? 0
-              }
-            />
-          </section>
+          <AdminOverview
+            dashboard={dashboard}
+            bookings={bookings}
+            beauticians={beauticians}
+            catalog={catalog}
+            onOpenBooking={openBookingDetails}
+            onGoBookings={() => setActiveView("booking-list")}
+            onGoCreate={() => setActiveView("booking-create")}
+          />
         )}
 
         {activeView === "analytics" && (
@@ -1561,8 +1634,13 @@ function App() {
                   onChange={(e) => setBooking("customer_notes", e.target.value)}
                 />
               </Field>
-              <div className="actions">
-                <button>إنشاء الطلب</button>
+              <BookingSummaryCard
+                bookingForm={bookingForm}
+                catalog={catalog}
+                beauticians={beauticians}
+              />
+              <div className="actions booking-submit-action">
+                <button>تأكيد وإنشاء الطلب</button>
               </div>
             </form>
           </section>
@@ -2103,9 +2181,15 @@ function App() {
         )}
 
         {activeView === "booking-list" && (
-          <section className="panel">
-            <h2>الطلبات</h2>
-            <div className="filters">
+          <section className="panel booking-management-panel">
+            <div className="panel-title-row">
+              <div>
+                <h2>إدارة الطلبات</h2>
+                <p className="muted">فلترة، متابعة الحالة، تعيين الخبيرة، ومراجعة تفاصيل كل طلب من مكان واحد.</p>
+              </div>
+              <button onClick={() => setActiveView("booking-create")}>+ إنشاء طلب</button>
+            </div>
+            <div className="filters booking-filters">
               <input
                 placeholder="بحث"
                 value={filters.q}
@@ -2167,7 +2251,8 @@ function App() {
             <p className="muted">
               المعروض: {filteredBookings.length} من {bookings.length}
             </p>
-            <table>
+            <div className="tableWrap admin-table-wrap">
+            <table className="admin-data-table bookings-table">
               <thead>
                 <tr>
                   <th>رقم الطلب</th>
@@ -2210,6 +2295,8 @@ function App() {
                       {formatDate(b.booking_date)} {formatTime(b.booking_time)}
                     </td>
                     <td>
+                      <StatusBadge status={b.status || "new"} />
+                      <StatusStepper status={b.status || "new"} />
                       <select
                         value={b.status || "new"}
                         disabled={!!updating[`status:${b.id}`]}
@@ -2223,6 +2310,7 @@ function App() {
                       </select>
                     </td>
                     <td>
+                      <PaymentBadge status={b.payment_status || "unpaid"} />
                       <select
                         className="payment-select"
                         value={b.payment_status || "unpaid"}
@@ -2285,6 +2373,7 @@ function App() {
                 ))}
               </tbody>
             </table>
+            </div>
           </section>
         )}
       </main>
@@ -2292,6 +2381,109 @@ function App() {
   );
 }
 
+
+
+function AdminOverview({ dashboard, bookings, beauticians, catalog, onOpenBooking, onGoBookings, onGoCreate }) {
+  const safeBookings = Array.isArray(bookings) ? bookings : [];
+  const todayKey = new Date().toISOString().slice(0, 10);
+  const todayBookings = safeBookings.filter((b) => String(b.booking_date || "").slice(0, 10) === todayKey);
+  const urgentBookings = safeBookings.filter((b) => ["new", "under_review", "waiting_customer_confirmation"].includes(b.status || "new")).slice(0, 6);
+  const activeBeauticians = (beauticians || []).filter((a) => a.status === "active").length;
+  const serviceCount = Array.isArray(catalog?.services) ? catalog.services.length : 0;
+  const monthlyData = buildLast12Months().map((key) => ({
+    label: arabicMonthLabel(key),
+    value: safeBookings.filter((b) => monthKey(b.booking_date || b.created_at) === key).length,
+  }));
+  const statusData = groupMetric(safeBookings, (b) => statusLabels[b.status || "new"] || b.status || "جديد").slice(0, 6);
+  const cityData = groupMetric(safeBookings, (b) => b.city_name || "غير محدد").slice(0, 5);
+
+  return (
+    <section className="admin-overview-page">
+      <div className="overview-hero panel">
+        <div>
+          <span className="eyebrow">Admin Command Center</span>
+          <h2>نظرة تشغيلية على الحجوزات والخدمات</h2>
+          <p className="muted">متابعة الطلبات الجديدة، تعيين الخبيرات، مؤشرات الدفع، وحركة الحجز من شاشة واحدة.</p>
+        </div>
+        <div className="overview-actions">
+          <button onClick={onGoCreate}>إنشاء طلب جديد</button>
+          <button className="secondary" onClick={onGoBookings}>إدارة الطلبات</button>
+        </div>
+      </div>
+      <div className="overview-kpis">
+        <AnalyticsStatCard icon={ClipboardList} title="كل الطلبات" value={dashboard.total_bookings ?? safeBookings.length} sub="إجمالي الطلبات المسجلة" />
+        <AnalyticsStatCard icon={Bell} title="طلبات جديدة" value={dashboard.new_bookings ?? safeBookings.filter((b) => (b.status || "new") === "new").length} sub="تحتاج مراجعة" />
+        <AnalyticsStatCard icon={CalendarDays} title="طلبات اليوم" value={dashboard.today_bookings ?? todayBookings.length} sub="مواعيد اليوم" />
+        <AnalyticsStatCard icon={AlertCircle} title="بدون خبيرة" value={dashboard.unassigned_bookings ?? safeBookings.filter((b) => !b.assigned_artist_id).length} sub="تحتاج تعيين" />
+        <AnalyticsStatCard icon={Wallet} title="غير مدفوعة" value={dashboard.unpaid_bookings ?? safeBookings.filter((b) => (b.payment_status || "unpaid") === "unpaid").length} sub="متابعة التحصيل" />
+        <AnalyticsStatCard icon={Users} title="خبيرات فعالات" value={dashboard.active_beauticians ?? dashboard.active_artists ?? activeBeauticians} sub={`الخدمات: ${serviceCount}`} />
+      </div>
+      <div className="overview-grid">
+        <div className="analytics-card">
+          <div className="analytics-card-head">
+            <div><h2>حركة الحجوزات الشهرية</h2><p>آخر 12 شهر حسب تاريخ الحجز أو تاريخ الإنشاء.</p></div>
+          </div>
+          <MiniLineChart data={monthlyData} />
+        </div>
+        <div className="analytics-card">
+          <div className="analytics-card-head">
+            <div><h2>الحجوزات حسب الحالة</h2><p>مؤشر سريع لحالة التشغيل الحالية.</p></div>
+          </div>
+          <HorizontalBars data={statusData} />
+        </div>
+      </div>
+      <div className="overview-grid secondary-grid">
+        <div className="analytics-card">
+          <div className="analytics-card-head"><div><h2>أكثر المدن طلباً</h2><p>يساعد في تخطيط تغطية الخبيرات.</p></div></div>
+          <HorizontalBars data={cityData} />
+        </div>
+        <div className="analytics-card recent-bookings-card">
+          <div className="analytics-card-head"><div><h2>طلبات تحتاج متابعة</h2><p>طلبات جديدة أو قيد المراجعة.</p></div></div>
+          <div className="recent-bookings-list">
+            {urgentBookings.length === 0 && <p className="muted">لا توجد طلبات عاجلة حالياً.</p>}
+            {urgentBookings.map((b) => (
+              <button key={b.id} className="recent-booking-item" onClick={() => onOpenBooking(b)}>
+                <span><b>{b.customer_name || "عميلة"}</b><small>{b.service_name || "خدمة"} • {b.city_name || "-"}</small></span>
+                <StatusBadge status={b.status || "new"} />
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function findById(list, id) {
+  return (Array.isArray(list) ? list : []).find((x) => sameId(x.id, id));
+}
+function BookingSummaryCard({ bookingForm, catalog, beauticians }) {
+  const category = findById(catalog?.service_categories, bookingForm.service_category_id);
+  const service = findById(catalog?.services, bookingForm.service_id);
+  const region = findById(catalog?.regions, bookingForm.region_id);
+  const city = findById(catalog?.cities, bookingForm.city_id);
+  const district = findById(catalog?.districts, bookingForm.district_id);
+  const artist = findById(beauticians, bookingForm.preferred_artist_id);
+  const price = service ? [service.min_price, service.max_price].filter(Boolean).join(" - ") : "-";
+  return (
+    <div className="booking-summary-card">
+      <div className="booking-summary-head">
+        <CheckCircle2 size={22} />
+        <div><b>ملخص الطلب قبل الإنشاء</b><small>راجع البيانات الأساسية قبل الحفظ.</small></div>
+      </div>
+      <div className="booking-summary-grid">
+        <span><b>العميلة</b>{bookingForm.name || "-"}</span>
+        <span><b>الجوال</b>{bookingForm.phone || "-"}</span>
+        <span><b>القسم</b>{category?.name_ar || "-"}</span>
+        <span><b>الخدمة</b>{service?.display_name || service?.name_ar || "-"}</span>
+        <span><b>الموقع</b>{[region?.name_ar, city?.name_ar, district?.name_ar].filter(Boolean).join(" / ") || "-"}</span>
+        <span><b>الموعد</b>{bookingForm.booking_date || "-"} {bookingForm.booking_time || ""}</span>
+        <span><b>الخبيرة</b>{artist?.name || "بدون تفضيل"}</span>
+        <span><b>السعر المتوقع</b>{price !== "-" ? `${price} ر.س` : "-"}</span>
+      </div>
+    </div>
+  );
+}
 
 function numberValue(value) {
   const n = Number(value);
@@ -2874,160 +3066,125 @@ function BookingDetailsModal({
   assignBeautician,
   updatePayment,
   updatePaymentDetails,
+  addBookingNote,
   updating = {},
   close,
 }) {
+  const [note, setNote] = useState("");
+  const activeBeauticians = (beauticians || []).filter((a) => a.status === "active");
+  const saveNote = async () => {
+    await addBookingNote?.(booking.id, note);
+    setNote("");
+  };
   return (
     <div className="modal-backdrop">
-      <div className="modal-card">
-        <div className="modal-head">
-          <h2>تفاصيل الطلب {booking.booking_number || ""}</h2>
-          <button onClick={close}>إغلاق</button>
+      <div className="modal-card booking-details-card">
+        <div className="modal-head booking-modal-head">
+          <div>
+            <span className="eyebrow">تفاصيل الطلب</span>
+            <h2>{booking.booking_number || booking.id}</h2>
+            <p className="muted">إدارة الحالة، الخبيرة، الدفع، والملاحظات الإدارية.</p>
+          </div>
+          <button className="secondary" onClick={close}>إغلاق</button>
         </div>
-        <div className="detail-grid">
-          <p>
-            <b>رقم الطلب:</b> {booking.booking_number || booking.id}
-          </p>
-          <p>
-            <b>مصدر الطلب:</b>{" "}
-            {booking.booking_source_label || booking.booking_source || "-"}
-          </p>
-          <p>
-            <b>العميلة:</b> {booking.customer_name || "-"}
-          </p>
-          <p>
-            <b>الجوال:</b> {booking.customer_phone || "-"}
-          </p>
-          <p>
-            <b>الموقع:</b> {booking.region_name || "-"} /{" "}
-            {booking.city_name || "-"} / {booking.district_name || "-"}
-          </p>
-          <p>
-            <b>الخدمة:</b> {booking.service_category_name || "-"} /{" "}
-            {booking.service_name || "-"}
-          </p>
-          <p>
-            <b>خبيرة مفضلة:</b> {booking.preferred_artist_name || "-"}
-          </p>
-          <p>
-            <b>خبيرة معينة:</b> {booking.artist_name || "-"}
-          </p>
-          <p>
-            <b>التاريخ:</b> {formatDate(booking.booking_date)}{" "}
-            {formatTime(booking.booking_time)}
-          </p>
-          <p>
-            <b>ملاحظات العميلة:</b> {booking.customer_notes || "-"}
-          </p>
-          <p>
-            <b>حالة الدفع:</b>{" "}
-            {paymentLabels[booking.payment_status || "unpaid"]}
-          </p>
-          <p>
-            <b>طريقة الدفع:</b>{" "}
-            {paymentMethodLabels[booking.payment_method] ||
-              booking.payment_method ||
-              "-"}
-          </p>
-          <p>
-            <b>مرجع الدفع:</b> {booking.payment_reference || "-"}
-          </p>
-          <p>
-            <b>إثبات الدفع:</b>{" "}
-            {booking.payment_proof_url ? (
-              <a href={booking.payment_proof_url} target="_blank">
-                فتح الإيصال
-              </a>
-            ) : (
-              "-"
-            )}
-          </p>
-          <p>
-            <b>طريقة التواصل:</b>{" "}
-            {contactLabels[booking.contact_preference] ||
-              booking.contact_preference ||
-              "-"}
-          </p>
-          <p>
-            <b>وقت بديل:</b> {booking.alternate_time || "-"}
-          </p>
+
+        <div className="booking-detail-hero">
+          <div>
+            <StatusBadge status={booking.status || "new"} />
+            <StatusStepper status={booking.status || "new"} />
+          </div>
+          <div>
+            <PaymentBadge status={booking.payment_status || "unpaid"} />
+            <small>{paymentMethodLabels[booking.payment_method] || booking.payment_method || "لم يتم تحديد طريقة الدفع"}</small>
+          </div>
         </div>
+
+        <div className="booking-detail-sections">
+          <section className="detail-section">
+            <h3>بيانات العميلة</h3>
+            <div className="detail-grid compact">
+              <p><b>الاسم:</b> {booking.customer_name || "-"}</p>
+              <p><b>الجوال:</b> {booking.customer_phone || "-"}</p>
+              <p><b>التواصل:</b> {contactLabels[booking.contact_preference] || booking.contact_preference || "-"}</p>
+              <p><b>المصدر:</b> {booking.booking_source_label || booking.booking_source || "-"}</p>
+            </div>
+          </section>
+          <section className="detail-section">
+            <h3>الخدمة والموقع</h3>
+            <div className="detail-grid compact">
+              <p><b>القسم:</b> {booking.service_category_name || "-"}</p>
+              <p><b>الخدمة:</b> {booking.service_name || "-"}</p>
+              <p><b>الموقع:</b> {booking.region_name || "-"} / {booking.city_name || "-"} / {booking.district_name || "-"}</p>
+              <p><b>العنوان:</b> {booking.address || "-"}</p>
+            </div>
+          </section>
+          <section className="detail-section">
+            <h3>الموعد والخبيرة</h3>
+            <div className="detail-grid compact">
+              <p><b>التاريخ:</b> {formatDate(booking.booking_date)}</p>
+              <p><b>الوقت:</b> {formatTime(booking.booking_time)}</p>
+              <p><b>وقت بديل:</b> {booking.alternate_time || "-"}</p>
+              <p><b>خبيرة مفضلة:</b> {booking.preferred_artist_name || "-"}</p>
+              <p><b>خبيرة معينة:</b> {booking.artist_name || "-"}</p>
+            </div>
+          </section>
+          <section className="detail-section">
+            <h3>الملاحظات والدفع</h3>
+            <div className="detail-grid compact">
+              <p><b>ملاحظات العميلة:</b> {booking.customer_notes || "-"}</p>
+              <p><b>ملاحظات الإدارة:</b> {booking.admin_notes || "-"}</p>
+              <p><b>مرجع الدفع:</b> {booking.payment_reference || "-"}</p>
+              <p><b>إثبات الدفع:</b> {booking.payment_proof_url ? <a href={booking.payment_proof_url} target="_blank">فتح الإيصال</a> : "-"}</p>
+            </div>
+          </section>
+        </div>
+
         {booking.design_image_url && (
           <div className="image-box">
-            <b>صورة التصميم:</b>
-            <br />
-            <a href={booking.design_image_url} target="_blank">
-              فتح الصورة
-            </a>
+            <b>صورة التصميم:</b><br />
+            <a href={booking.design_image_url} target="_blank">فتح الصورة</a>
           </div>
         )}
-        <div className="grid3">
+
+        <div className="operations-grid">
           <Field label="تغيير الحالة">
-            <Select
-              value={booking.status || "new"}
-              onChange={(v) => updateStatus(booking.id, v)}
-              disabled={!!updating[`status:${booking.id}`]}
-            >
-              {statusOptions.map(([k, v]) => (
-                <option key={k} value={k}>
-                  {v}
-                </option>
-              ))}
+            <Select value={booking.status || "new"} onChange={(v) => updateStatus(booking.id, v)} disabled={!!updating[`status:${booking.id}`]}>
+              {statusOptions.map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+            </Select>
+          </Field>
+          <Field label="تعيين خبيرة تجميل">
+            <Select value={booking.assigned_artist_id || ""} onChange={(v) => assignBeautician(booking.id, v)} disabled={!!updating[`assign:${booking.id}`]}>
+              <option value="">بدون تعيين</option>
+              {activeBeauticians.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
             </Select>
           </Field>
           <Field label="حالة الدفع">
-            <Select
-              value={booking.payment_status || "unpaid"}
-              onChange={(v) => updatePayment(booking.id, v)}
-              disabled={!!updating[`payment:${booking.id}`]}
-            >
-              {paymentOptions.map(([k, v]) => (
-                <option key={k} value={k}>
-                  {v}
-                </option>
-              ))}
+            <Select value={booking.payment_status || "unpaid"} onChange={(v) => updatePayment(booking.id, v)} disabled={!!updating[`payment:${booking.id}`]}>
+              {paymentOptions.map(([k, v]) => <option key={k} value={k}>{v}</option>)}
             </Select>
           </Field>
           <div className="field">
             <span>تفاصيل الدفع</span>
-            <button onClick={() => updatePaymentDetails(booking)}>
-              تعديل تفاصيل الدفع
-            </button>
+            <button className="secondary" onClick={() => updatePaymentDetails(booking)}>تعديل تفاصيل الدفع</button>
           </div>
-          <Field label="تعيين خبيرة تجميل">
-            <Select
-              value={booking.assigned_artist_id || ""}
-              onChange={(v) => assignBeautician(booking.id, v)}
-              disabled={!!updating[`assign:${booking.id}`]}
-            >
-              <option value="">بدون تعيين</option>
-              {beauticians
-                .filter((a) => a.status === "active")
-                .map((a) => (
-                  <option key={a.id} value={a.id}>
-                    {a.name}
-                  </option>
-                ))}
-            </Select>
-          </Field>
         </div>
-        <div className="timeline">
-          <b>تسلسل الحالة:</b>
-          <span>طلب جديد</span>
-          <span>جاري المراجعة</span>
-          <span>تم التأكيد</span>
-          <span>تم التعيين</span>
-          <span>مكتمل</span>
+
+        <div className="admin-note-box">
+          <div>
+            <h3>ملاحظة إدارية جديدة</h3>
+            <p className="muted">تُحفظ الملاحظة في سجل أحداث الطلب ولا تظهر للعميلة إلا إذا تم ربطها لاحقاً بقالب تواصل.</p>
+          </div>
+          <textarea value={note} onChange={(e) => setNote(e.target.value)} placeholder="اكتب ملاحظة داخلية عن الطلب، المكالمة، أو التعيين..." />
+          <button onClick={saveNote}>حفظ الملاحظة</button>
         </div>
-        <div className="events-box">
+
+        <div className="events-box enhanced-events">
           <b>سجل أحداث الطلب</b>
           {(booking.events || []).length ? (
             booking.events.map((ev) => (
               <div className="event-row" key={ev.id}>
                 <span>{ev.title || ev.event_type}</span>
-                <small>
-                  {ev.description || ""} • {formatDate(ev.created_at)}
-                </small>
+                <small>{ev.description || ""} • {formatDate(ev.created_at)}</small>
               </div>
             ))
           ) : (
