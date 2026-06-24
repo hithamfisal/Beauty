@@ -1,17 +1,18 @@
+@import url('https://fonts.googleapis.com/css2?family=Cairo:wght@400;500;600;700;800;900&family=Tajawal:wght@400;500;700;800;900&display=swap');
 @import url('https://fonts.googleapis.com/css2?family=Almarai:wght@300;400;700;800&family=Poppins:wght@400;600;700;800&display=swap');
 
 :root {
-  --rose-gold: #e6c7c2;
-  --rose-gold-strong: #c79a92;
-  --ivory: #fffdf8;
-  --warm-ivory: #fff9f5;
-  --soft-pink: #f9ece8;
-  --cream-gold: #dcc5a3;
-  --rich-charcoal: #4a3f35;
-  --soft-mocha: #9f8f81;
-  --deep-mocha: #6e574a;
+  --rose-gold: #D4A08A;
+  --rose-gold-strong: #B77D69;
+  --ivory: #FFF8F4;
+  --warm-ivory: #FFFFFF;
+  --soft-pink: #F7DDE1;
+  --cream-gold: #F4E6D2;
+  --rich-charcoal: #292929;
+  --soft-mocha: #A78678;
+  --deep-mocha: #7E5F54;
   --white: #ffffff;
-  --line: rgba(220, 197, 163, 0.55);
+  --line: #EBD8D0;
   --shadow: 0 18px 55px rgba(201, 154, 146, 0.18);
   --shadow-soft: 0 10px 30px rgba(74, 63, 53, 0.08);
   --radius-lg: 28px;
@@ -34,7 +35,7 @@ body {
     radial-gradient(circle at 92% 12%, rgba(220, 197, 163, .24), transparent 30%),
     linear-gradient(180deg, var(--ivory), #fbf2ee 52%, var(--warm-ivory));
   color: var(--rich-charcoal);
-  font-family: 'Almarai', 'Poppins', Tahoma, Arial, sans-serif;
+  font-family: 'Cairo', 'Tajawal', 'Almarai', Tahoma, Arial, sans-serif;
   overflow-x: hidden;
 }
 button, input, select, textarea { font: inherit; }
@@ -340,4 +341,116 @@ button:disabled { opacity: .55; cursor: not-allowed; transform: none; }
   .beauticianCard { flex-direction: column; align-items: stretch; }
   .beauticianCard img { width: 100%; height: 190px; }
   .portfolioCard img { height: 145px; }
+}
+
+/* v5.1 tenant branding */
+.app {
+  --rose-gold: var(--brand-primary, #e6c7c2);
+  --soft-pink: color-mix(in srgb, var(--brand-primary, #e6c7c2) 20%, #fff 80%);
+  --cream-gold: var(--brand-accent, #dcc5a3);
+  background: var(--brand-secondary, transparent);
+}
+.brandMark img { width: 100%; height: 100%; object-fit: cover; border-radius: 50%; }
+.brandBlock small { display:block; color: var(--soft-mocha); font-weight: 700; margin-top: 3px; font-size: 11px; }
+.hero { background-position: center; background-size: cover; }
+.primary, .submit { background: linear-gradient(135deg, var(--brand-primary, #e6c7c2), var(--brand-accent, #dcc5a3)); }
+
+/* ==========================================================
+   Beauty Home Service v5.3 — Luxury Soft Beauty Customer UX
+   Non-breaking visual refinement for customer journey.
+   ========================================================== */
+html { direction: rtl; background: var(--ivory); }
+body {
+  background:
+    radial-gradient(circle at 6% 0%, rgba(247, 221, 225, .82), transparent 31%),
+    radial-gradient(circle at 92% 7%, rgba(244, 230, 210, .75), transparent 33%),
+    linear-gradient(180deg, #fffaf8 0%, var(--ivory) 54%, #fff 100%);
+}
+.siteHeader {
+  border-color: var(--line);
+  background: rgba(255,255,255,.86);
+  box-shadow: 0 18px 46px rgba(167,134,120,.13);
+}
+.brandMark, .statIcon, .categoryCard span, .serviceChips button span {
+  background: linear-gradient(135deg, var(--soft-pink), #fff);
+  color: var(--rose-gold-strong);
+  border: 1px solid var(--line);
+}
+.brandMark {
+  color: #fff;
+  background: linear-gradient(135deg, var(--rose-gold), var(--rose-gold-strong));
+}
+.topNav button.active {
+  background: linear-gradient(135deg, #fff, var(--soft-pink));
+  color: var(--rose-gold-strong);
+  box-shadow: inset 0 0 0 1px rgba(212,160,138,.28), 0 8px 18px rgba(167,134,120,.08);
+}
+.hero {
+  background:
+    linear-gradient(90deg, rgba(41,41,41,.64), rgba(41,41,41,.10)),
+    radial-gradient(circle at 18% 18%, rgba(247,221,225,.42), transparent 35%),
+    linear-gradient(135deg, #D4A08A, #F7DDE1 45%, #FFF8F4);
+}
+.heroText span, .eyebrow {
+  color: var(--rose-gold-strong);
+  background: rgba(255,255,255,.9);
+  border-color: var(--line);
+}
+.primary, .submit, button.primary {
+  background: linear-gradient(135deg, var(--rose-gold), var(--rose-gold-strong));
+  color: #fff;
+  box-shadow: 0 14px 30px rgba(212,160,138,.30);
+}
+.mode, .guestBtn, .quickLogin button, .signedInActions button, .linkBtn, .portfolioCard button, .beauticianCard button,
+.secondary, .ghostBtn {
+  background: rgba(255,248,244,.94);
+  border-color: var(--line);
+  color: var(--rose-gold-strong);
+  box-shadow: 0 8px 20px rgba(167,134,120,.08);
+}
+.panel, .profile, .customerAccess, .stat, .homeWelcome, .miniFeature, .categoryCard, .serviceChips button,
+.serviceCard, .bookingCard, .portfolioCard, .beauticianCard, .summaryCard, .formCard {
+  border-color: var(--line) !important;
+  background: rgba(255,255,255,.94) !important;
+  box-shadow: 0 14px 36px rgba(167,134,120,.10) !important;
+}
+.homeWelcome, .customerAccess {
+  background: linear-gradient(135deg, rgba(255,255,255,.96), rgba(255,248,244,.94)) !important;
+}
+.panel h2, .profile h2, .homeWelcome h2, .customerAccess h2 { color: var(--rich-charcoal); font-weight: 900; }
+input, select, textarea, .phoneMaskInput {
+  min-height: 48px;
+  border: 1px solid var(--line) !important;
+  border-radius: 16px;
+  background: #fff;
+  color: var(--rich-charcoal);
+  outline: none;
+}
+input:focus, select:focus, textarea:focus {
+  border-color: var(--rose-gold) !important;
+  box-shadow: 0 0 0 4px rgba(212,160,138,.16);
+}
+.field span { color: #7A5D52; font-weight: 900; }
+.status, .badge, .bookingStatus, .paymentStatus {
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  font-weight: 900;
+}
+.status.new, .status.pending, .bookingStatus.new { background: var(--soft-pink); color: var(--rose-gold-strong); }
+.status.confirmed, .status.completed, .bookingStatus.completed { background: #EAF7EF; color: #3A8A57; border-color: #CBEBD5; }
+.status.cancelled, .bookingStatus.cancelled { background: #FDEDEC; color: #B23B35; border-color: #F3C8C4; }
+.stepper span, .progressStep {
+  border-color: var(--line);
+}
+.stepper span.active, .progressStep.active, .progressStep.done {
+  background: linear-gradient(135deg, var(--rose-gold), var(--rose-gold-strong));
+  color: #fff;
+}
+@media (max-width: 760px) {
+  .siteHeader { border-radius: 26px; grid-template-columns: 1fr; position: relative; top: 0; }
+  .topNav { justify-content: flex-start; }
+  .hero { min-height: 300px; border-radius: 30px; }
+  .heroText { padding: 30px 22px; }
+  .quickLogin, .inlineAuth { grid-template-columns: 1fr; }
+  .dashStats, .homeShowcase { grid-template-columns: 1fr; }
 }

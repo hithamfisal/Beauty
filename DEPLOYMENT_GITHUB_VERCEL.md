@@ -101,7 +101,7 @@ Root Directory: backend
 Framework Preset: Other
 Build Command: leave default or empty
 Output Directory: leave empty
-Install Command: yarn install
+Install Command: npm install
 ```
 
 Environment Variables:
@@ -136,9 +136,9 @@ Settings:
 ```txt
 Root Directory: admin-dashboard
 Framework Preset: Vite
-Build Command: yarn build
+Build Command: npm run build
 Output Directory: dist
-Install Command: yarn install
+Install Command: npm install
 ```
 
 Environment Variable:
@@ -190,14 +190,14 @@ Backend:
 
 ```powershell
 cd "D:\Dashboards Projects\Beauty\Beauty V1\backend"
-yarn dev
+npm run dev
 ```
 
 Admin Dashboard:
 
 ```powershell
 cd "D:\Dashboards Projects\Beauty\Beauty V1\admin-dashboard"
-yarn dev
+npm run dev
 ```
 
 Mobile App local phone test:

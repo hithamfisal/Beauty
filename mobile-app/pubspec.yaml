@@ -1,7 +1,7 @@
 name: beauty_home_service
-description: Beauty Home Service customer app v3.0
+description: تطبيق العميلة لخدمات بيوتي هوم سيرفس
 publish_to: 'none'
-version: 3.0.0+30
+version: 3.9.0+39
 
 environment:
   sdk: '>=3.0.0 <4.0.0'

@@ -4,10 +4,21 @@ import { CalendarDays, MapPin, Search, Sparkles, Star, UserCheck, MessageCircle,
 import './style.css';
 
 const API_BASE = (import.meta.env.VITE_API_BASE_URL || 'http://localhost:4000/api').replace(/\/+$/, '');
+const DEFAULT_TENANT_SLUG = import.meta.env.VITE_DEFAULT_TENANT_SLUG || 'beauty-home-service';
+function detectTenantSlug() {
+  const qs = new URLSearchParams(window.location.search);
+  const querySlug = qs.get('tenant') || qs.get('tenant_slug');
+  if (querySlug) return querySlug.trim().toLowerCase();
+  const firstSegment = window.location.pathname.split('/').filter(Boolean)[0];
+  if (firstSegment && !['app','customer','index.html'].includes(firstSegment)) return firstSegment.trim().toLowerCase();
+  return localStorage.getItem('beauty_tenant_slug') || DEFAULT_TENANT_SLUG;
+}
+const TENANT_SLUG = detectTenantSlug();
+localStorage.setItem('beauty_tenant_slug', TENANT_SLUG);
 
 async function api(path, options = {}) {
   const res = await fetch(`${API_BASE}${path.startsWith('/') ? path : `/${path}`}`, {
-    headers: { 'Content-Type': 'application/json', ...(options.headers || {}) },
+    headers: { 'Content-Type': 'application/json', 'x-tenant-slug': TENANT_SLUG, ...(options.headers || {}) },
     ...options,
   });
   const text = await res.text();
@@ -126,6 +137,7 @@ function App() {
   const [districts, setDistricts] = useState([]);
   const [categories, setCategories] = useState([]);
   const [services, setServices] = useState([]);
+  const [occasionTypes, setOccasionTypes] = useState([]);
   const [beauticians, setBeauticians] = useState([]);
   const [portfolio, setPortfolio] = useState([]);
   const [booking, setBooking] = useState(emptyBooking);
@@ -134,6 +146,7 @@ function App() {
   const [selectedBeautician, setSelectedBeautician] = useState(null);
   const [message, setMessage] = useState('');
   const [loading, setLoading] = useState(false);
+  const [tenant, setTenant] = useState(null);
   const [customerToken, setCustomerToken] = useState(() => localStorage.getItem('beauty_customer_token') || '');
   const [customer, setCustomer] = useState(null);
   const [authPhone, setAuthPhone] = useState('');
@@ -168,8 +181,12 @@ function App() {
 
   async function init() {
     try {
-      const [r, sc, p] = await Promise.all([api('/regions'), api('/service-categories'), api('/portfolio')]);
-      setRegions(r || []); setCategories(sc || []); setPortfolio(p || []);
+      const tenantProfile = await api('/tenant');
+      setTenant(tenantProfile || null);
+      document.title = tenantProfile?.business_name ? `${tenantProfile.business_name} | الحجز` : 'منصة حجز خدمات التجميل';
+      const [r, sc, p, ot] = await Promise.all([api('/regions'), api('/service-categories'), api('/portfolio'), api('/occasion-types')]);
+      setRegions(r || []); setCategories(sc || []); setPortfolio(p || []); setOccasionTypes(ot || []);
+      if (!booking.event_type && Array.isArray(ot) && ot[0]) setBookingField('event_type', ot[0].name_ar || ot[0].name_en || 'مناسبة خاصة');
       await Promise.all([loadCities(''), loadDistricts(''), loadServices(''), loadBeauticians()]);
     } catch (e) { setMessage(`تعذر تحميل البيانات: ${e.message}`); }
   }
@@ -342,27 +359,33 @@ function App() {
   const bookingServices = useMemo(() => services.filter(s => !booking.service_category_id || sameId(s.category_id, booking.service_category_id)), [services, booking.service_category_id]);
 
   const navItems = [
-    { id: 'home', label: 'Home', ar: 'الرئيسية', icon: <HomeIcon size={22}/> },
-    { id: 'booking', label: 'Request Booking', ar: 'طلب حجز', icon: <PlusSquare size={22}/> },
-    { id: 'beauticians', label: 'Experts', ar: 'الخبيرات', icon: <Users size={22}/> },
-    { id: 'track', label: 'Order Tracking', ar: 'متابعة الطلب', icon: <ClipboardList size={22}/> },
-    { id: 'account', label: 'My Account', ar: 'حسابي', icon: <UserCircle size={22}/> }
+    { id: 'home', label: 'الرئيسية', ar: 'الرئيسية', icon: <HomeIcon size={22}/> },
+    { id: 'booking', label: 'طلب حجز', ar: 'طلب حجز', icon: <PlusSquare size={22}/> },
+    { id: 'beauticians', label: 'الخبيرات', ar: 'الخبيرات', icon: <Users size={22}/> },
+    { id: 'track', label: 'متابعة الطلب', ar: 'متابعة الطلب', icon: <ClipboardList size={22}/> },
+    { id: 'account', label: 'حسابي', ar: 'حسابي', icon: <UserCircle size={22}/> }
   ];
 
-  return <div className="app">
+  const tenantStyle = tenant ? {
+    '--brand-primary': tenant.primary_color || '#E6C7C2',
+    '--brand-secondary': tenant.secondary_color || '#FFFDF8',
+    '--brand-accent': tenant.accent_color || '#DCC5A3'
+  } : {};
+
+  return <div className="app" style={tenantStyle}>
     <header className="siteHeader">
       <div className="brandBlock" onClick={() => setTab('home')} role="button" tabIndex={0}>
-        <div className="brandMark"><Sparkles size={30}/></div>
-        <div><b>Beauty</b><b>Home Service</b></div>
+        <div className="brandMark">{tenant?.logo_url ? <img src={tenant.logo_url} alt={tenant.business_name || 'الشعار'} /> : <Sparkles size={30}/>}</div>
+        <div><b>{tenant?.business_name || 'بيوتي هوم سيرفس'}</b><small>{tenant?.tagline_ar || 'خدمات تجميل منزلية'}</small></div>
       </div>
-      <nav className="topNav" aria-label="Customer navigation">
+      <nav className="topNav" aria-label="تنقل العميلة">
         {navItems.map(item => <button key={item.id} className={tab === item.id ? 'active' : ''} onClick={() => setTab(item.id)}>{item.icon}<span>{item.label}</span><small>{item.ar}</small></button>)}
       </nav>
       <div className="headerActions"><Search size={22}/><Bell size={22}/></div>
     </header>
 
-    <section className="hero">
-      <div className="heroText"><span>خدمات تجميل منزلية</span><h1>احجزي خدمتك بسهولة وشاهدي أعمال الخبيرات قبل الاختيار</h1><p>واجهة عميلة منظمة للحجز، عرض النماذج، متابعة الطلبات، والدخول برقم الجوال.</p><button className="primary" onClick={() => setTab('booking')}>ابدئي طلب حجز</button></div>
+    <section className="hero" style={tenant?.cover_image_url ? { backgroundImage: `linear-gradient(90deg, rgba(255,253,248,.95), rgba(255,253,248,.60)), url(${tenant.cover_image_url})` } : undefined}>
+      <div className="heroText"><span>{tenant?.tagline_ar || 'خدمات تجميل منزلية'}</span><h1>{tenant?.business_name ? `احجزي مع ${tenant.business_name}` : 'احجزي خدمتك بسهولة وشاهدي أعمال الخبيرات قبل الاختيار'}</h1><p>{tenant?.description_ar || 'واجهة عميلة منظمة للحجز، عرض النماذج، متابعة الطلبات، والدخول برقم الجوال.'}</p><button className="primary" onClick={() => setTab('booking')} disabled={tenant?.public_booking_enabled === false}>{tenant?.public_booking_enabled === false ? 'الحجز غير متاح حالياً' : 'ابدئي طلب حجز'}</button></div>
     </section>
 
     <CustomerAccessStrip
@@ -386,13 +409,13 @@ function App() {
     {loading && <div className="loading">جاري التحميل...</div>}
 
     {tab === 'home' && <Home categories={categories} portfolio={portfolio} beauticians={beauticians} setTab={setTab} openBeautician={openBeautician} />}
-    {tab === 'booking' && <BookingForm booking={booking} setBookingField={setBookingField} regions={regions} cities={bookingCities} districts={bookingDistricts} categories={categories} services={bookingServices} beauticians={beauticians} portfolio={portfolio} uploadImage={uploadImage} submitBooking={submitBooking} openBeautician={openBeautician} customerToken={customerToken} customer={customer} bookingMode={bookingMode} setBookingMode={setBookingMode} authName={authName} setAuthName={setAuthName} authPhone={authPhone} setAuthPhone={setAuthPhone} otp={otp} setOtp={setOtp} requestOtp={requestOtp} verifyOtp={verifyOtp} />}
+    {tab === 'booking' && <BookingForm booking={booking} setBookingField={setBookingField} regions={regions} cities={bookingCities} districts={bookingDistricts} categories={categories} services={bookingServices} occasionTypes={occasionTypes} beauticians={beauticians} portfolio={portfolio} uploadImage={uploadImage} submitBooking={submitBooking} openBeautician={openBeautician} customerToken={customerToken} customer={customer} bookingMode={bookingMode} setBookingMode={setBookingMode} authName={authName} setAuthName={setAuthName} authPhone={authPhone} setAuthPhone={setAuthPhone} otp={otp} setOtp={setOtp} requestOtp={requestOtp} verifyOtp={verifyOtp} />}
     {tab === 'beauticians' && <BeauticiansPage beauticians={beauticians} portfolio={portfolio} openBeautician={openBeautician} />}
     {tab === 'beautician' && <BeauticianDetails data={selectedBeautician} choose={(id) => { setBookingField('preferred_artist_id', id); setTab('booking'); }} />}
     {tab === 'track' && <TrackPage phone={trackingPhone} setPhone={setTrackingPhone} results={trackingResults} submit={trackBookings} />}
     {tab === 'account' && <AccountPage customerToken={customerToken} customer={customer} authName={authName} setAuthName={setAuthName} authPhone={authPhone} setAuthPhone={setAuthPhone} otp={otp} setOtp={setOtp} requestOtp={requestOtp} verifyOtp={verifyOtp} logoutCustomer={logoutCustomer} bookings={accountBookings} addresses={addresses} addressForm={addressForm} setAddressForm={setAddressForm} saveAddress={saveAddress} regions={regions} cities={cities} districts={districts} />}
 
-    <SiteFooter setTab={setTab} />
+    <SiteFooter setTab={setTab} tenant={tenant} />
   </div>;
 }
 
@@ -413,8 +436,8 @@ function CustomerAccessStrip({ customerToken, customer, bookingMode, setBookingM
     </div>
 
     {isLoggedIn ? <div className="signedInBox">
-      <div className="signedProfile"><img src="https://images.unsplash.com/photo-1494790108377-be9c29b29330?q=80&w=300&auto=format&fit=crop" alt="customer"/><div><b>{customer?.name || customer?.phone}</b><small>{customer?.phone}</small></div></div>
-      <div className="signedInActions"><button type="button" onClick={() => setTab('account')}>My Account / Orders</button><button type="button" onClick={logoutCustomer}>Logout</button></div>
+      <div className="signedProfile"><img src="https://images.unsplash.com/photo-1494790108377-be9c29b29330?q=80&w=300&auto=format&fit=crop" alt="العميلة"/><div><b>{customer?.name || customer?.phone}</b><small>{customer?.phone}</small></div></div>
+      <div className="signedInActions"><button type="button" onClick={() => setTab('account')}>حسابي / طلباتي</button><button type="button" onClick={logoutCustomer}>تسجيل الخروج</button></div>
     </div> : <form className="quickLogin" onSubmit={verifyOtp}>
       <Input value={authName} onChange={setAuthName} placeholder="اسم العميلة للتسجيل أول مرة" />
       <PhoneInput value={authPhone} onChange={setAuthPhone} />
@@ -433,7 +456,7 @@ function Home({ categories, portfolio, beauticians, setTab, openBeautician }) {
   return <main className="container homeLayout">
     <section className="homeShowcase">
       <div className="homeWelcome">
-        <span className="eyebrow">Luxury Soft Beauty</span>
+        <span className="eyebrow">جمال فاخر وناعم</span>
         <h2>جمالكِ في بيتك بخطوات حجز واضحة وناعمة</h2>
         <p>اختاري القسم، الخدمة، الموعد، والموقع. بعد إرسال الطلب يتواصل معك فريق الدعم لتأكيد توفر الخبيرة والموعد.</p>
         <div className="homeSearch"><input placeholder="ابحثي عن حناء، مكياج، شعر، أظافر..."/><button className="primary" onClick={() => setTab('booking')}><Search size={18}/> حجز سريع</button></div>
@@ -446,9 +469,9 @@ function Home({ categories, portfolio, beauticians, setTab, openBeautician }) {
     </section>
 
     <section className="dashStats">
-      <Card icon={<Scissors/>} title="Service Sections" sub="أقسام الخدمات" value={categories.length}/>
-      <Card icon={<UserCheck/>} title="Beauty Experts" sub="خبيرات متاحات" value={beauticians.length}/>
-      <Card icon={<ImagePlus/>} title="Portfolio Samples" sub="نماذج أعمال" value={portfolio.length}/>
+      <Card icon={<Scissors/>} title="أقسام الخدمات" sub="أقسام الخدمات" value={categories.length}/>
+      <Card icon={<UserCheck/>} title="خبيرات التجميل" sub="خبيرات متاحات" value={beauticians.length}/>
+      <Card icon={<ImagePlus/>} title="نماذج الأعمال" sub="نماذج أعمال" value={portfolio.length}/>
     </section>
 
     <section className="panel servicePanel">
@@ -468,7 +491,7 @@ function Home({ categories, portfolio, beauticians, setTab, openBeautician }) {
   </main>
 }
 function Card({ icon, title, sub, value }) { return <div className="stat"><div className="statIcon">{icon}</div><div><strong>{value}</strong><span>{title}</span>{sub && <small>{sub}</small>}</div></div> }
-function BookingForm({ booking, setBookingField, regions, cities, districts, categories, services, beauticians, portfolio, uploadImage, submitBooking, openBeautician, customerToken, customer, bookingMode, setBookingMode, authName, setAuthName, authPhone, setAuthPhone, otp, setOtp, requestOtp, verifyOtp }) {
+function BookingForm({ booking, setBookingField, regions, cities, districts, categories, services, occasionTypes, beauticians, portfolio, uploadImage, submitBooking, openBeautician, customerToken, customer, bookingMode, setBookingMode, authName, setAuthName, authPhone, setAuthPhone, otp, setOtp, requestOtp, verifyOtp }) {
   const selectedService = services.find(s => s.id === booking.service_id);
   const usingAccount = bookingMode === 'account' && customerToken && customer;
   const needAccountLogin = bookingMode === 'account' && !customerToken;
@@ -495,7 +518,7 @@ function BookingForm({ booking, setBookingField, regions, cities, districts, cat
       <form className="bookingGrid" onSubmit={submitBooking}>
         <Field label="اسم العميلة"><Input required disabled={usingAccount} value={booking.customer_name} onChange={v=>setBookingField('customer_name',v)} placeholder={usingAccount ? 'من بيانات الحساب' : 'الاسم'} /></Field>
         <Field label="رقم الجوال"><PhoneInput required disabled={usingAccount} value={booking.phone} onChange={v=>setBookingField('phone',v)} placeholder={usingAccount ? 'من بيانات الحساب' : PHONE_PLACEHOLDER} /></Field>
-        <Field label="نوع المناسبة"><Input value={booking.event_type} onChange={v=>setBookingField('event_type',v)} /></Field>
+        <Field label="نوع المناسبة"><Select value={booking.event_type} onChange={v=>setBookingField('event_type',v)}><option value="">اختاري نوع المناسبة</option>{(occasionTypes || []).map(o=><option key={o.id} value={o.name_ar || o.name_en || o.id}>{o.name_ar || o.name_en}</option>)}</Select></Field>
         <Field label="المنطقة"><Select value={booking.region_id} onChange={v=>setBookingField('region_id',v)}><OptionList items={regions} empty="كل المناطق / اختاري المنطقة" /></Select></Field>
         <Field label="المدينة"><Select value={booking.city_id} onChange={v=>setBookingField('city_id',v)}><OptionList items={cities} empty={booking.region_id ? "مدن المنطقة المختارة" : "كل المدن / اختاري المدينة"} /></Select></Field>
         <Field label="الحي"><Select value={booking.district_id} onChange={v=>setBookingField('district_id',v)}><OptionList items={districts} empty={booking.city_id ? "أحياء المدينة المختارة" : booking.region_id ? "أحياء المنطقة المختارة" : "كل الأحياء / اختاري الحي"} /></Select></Field>
@@ -554,13 +577,13 @@ function AccountPage({ customerToken, customer, authName, setAuthName, authPhone
 }
 
 
-function SiteFooter({ setTab }) {
+function SiteFooter({ setTab, tenant }) {
   return <footer className="siteFooter">
-    <div><h4>About Us</h4><button onClick={() => setTab('home')}>About Beauty Home Service</button><button onClick={() => setTab('beauticians')}>Our Experts</button></div>
-    <div><h4>Contact Us</h4><button>Contact With Us</button><button>Support</button></div>
-    <div><h4>Services</h4><button onClick={() => setTab('booking')}>Request Booking</button><button onClick={() => setTab('track')}>Order Tracking</button></div>
-    <div><h4>Legal</h4><button>Terms</button><button>Privacy</button></div>
-    <p>© Beauty Home Service</p>
+    <div><h4>عن التطبيق</h4><button onClick={() => setTab('home')}>عن {tenant?.business_name || 'بيوتي هوم سيرفس'}</button><button onClick={() => setTab('beauticians')}>خبيراتنا</button></div>
+    <div><h4>تواصل معنا</h4><button>تواصل معنا</button><button>الدعم</button></div>
+    <div><h4>الخدمات</h4><button onClick={() => setTab('booking')}>طلب حجز</button><button onClick={() => setTab('track')}>متابعة الطلب</button></div>
+    <div><h4>القانونية</h4><button>الشروط والأحكام</button><button>سياسة الخصوصية</button></div>
+    <p>© {tenant?.business_name || 'بيوتي هوم سيرفس'}</p>
   </footer>;
 }
 

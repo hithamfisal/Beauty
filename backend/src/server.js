@@ -1,7 +1,7 @@
 import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
-import { query, transaction } from './db.js';
+import { query, transaction, runWithTenantContext } from './db.js';
 import { runMigrations } from './migrations.js';
 import { ApiValidationError, assertUuid, uniqueUuidArray, validateBookingShape, validatePhone, normalizeSaudiPhone, validationResponse } from './validation.js';
 import jwt from 'jsonwebtoken';
@@ -22,6 +22,9 @@ const CUSTOMER_OTP_TEST_MODE = !IS_PRODUCTION || CUSTOMER_OTP_DEV_MODE;
 const JWT_SECRET = process.env.JWT_SECRET || (IS_PRODUCTION ? '' : 'beauty-home-service-local-secret');
 const DEFAULT_ADMIN_EMAIL = process.env.ADMIN_EMAIL || 'admin@beauty.local';
 const DEFAULT_ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'Beauty@12345';
+const DEFAULT_TENANT_SLUG = process.env.DEFAULT_TENANT_SLUG || 'beauty-home-service';
+const SUPER_ADMIN_EMAIL = String(process.env.SUPER_ADMIN_EMAIL || '').trim().toLowerCase();
+const SUPER_ADMIN_PASSWORD = String(process.env.SUPER_ADMIN_PASSWORD || '').trim();
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const BACKUP_DIR = process.env.BACKUP_DIR || path.resolve(__dirname, '..', 'backups');
@@ -91,6 +94,23 @@ async function ensureV14Schema() {
       updated_at TIMESTAMP DEFAULT NOW()
     )
   `);
+
+
+  await query(`
+    CREATE TABLE IF NOT EXISTS occasion_types (
+      id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+      name_ar VARCHAR(160) NOT NULL,
+      name_en VARCHAR(160),
+      description TEXT,
+      status VARCHAR(20) NOT NULL DEFAULT 'active',
+      sort_order INT DEFAULT 0,
+      tenant_id UUID REFERENCES tenants(id) ON DELETE CASCADE DEFAULT NULLIF(current_setting('app.current_tenant', true), '')::uuid,
+      created_at TIMESTAMP DEFAULT NOW(),
+      updated_at TIMESTAMP DEFAULT NOW()
+    )
+  `);
+  await query(`CREATE INDEX IF NOT EXISTS idx_occasion_types_status ON occasion_types(status, sort_order, name_ar)`);
+  await query(`CREATE INDEX IF NOT EXISTS idx_occasion_types_tenant_id ON occasion_types(tenant_id)`);
 
   await query(`ALTER TABLE cities ADD COLUMN IF NOT EXISTS region_id UUID REFERENCES regions(id)`);
   await query(`ALTER TABLE cities ADD COLUMN IF NOT EXISTS external_id VARCHAR(80)`);
@@ -347,7 +367,7 @@ async function ensureV17V18Schema() {
   const templateCount = await query(`SELECT COUNT(*)::int AS count FROM communication_templates`);
   if (templateCount.rows[0].count === 0) {
     const templates = [
-      ['new_request', 'رسالة طلب جديد', 'مرحباً {customer_name}، تم استلام طلبك في Beauty Home Service وسيتم التواصل معك لتأكيد الموعد. رقم الطلب: {booking_id}', 1],
+      ['new_request', 'رسالة طلب جديد', 'مرحباً {customer_name}، تم استلام طلبك في بيوتي هوم سيرفس وسيتم التواصل معك لتأكيد الموعد. رقم الطلب: {booking_id}', 1],
       ['confirm_booking', 'تأكيد الحجز', 'مرحباً {customer_name}، تم تأكيد حجزك لخدمة {service_name} بتاريخ {booking_date} الساعة {booking_time}.', 2],
       ['payment_reminder', 'تذكير الدفع', 'مرحباً {customer_name}، نذكرك بحالة الدفع لطلبك رقم {booking_id}. حالة الدفع الحالية: {payment_status}.', 3],
       ['completed_review', 'طلب التقييم', 'مرحباً {customer_name}، سعدنا بخدمتك. يمكنك فتح التطبيق وتقييم خبيرة التجميل للطلب رقم {booking_id}.', 4]
@@ -620,8 +640,58 @@ async function getSuitableBeauticiansForBooking(bookingId) {
   return { booking, suggestions };
 }
 
+
+async function getDefaultTenant() {
+  const result = await query(`SELECT * FROM tenants WHERE slug=$1 LIMIT 1`, [DEFAULT_TENANT_SLUG]);
+  return result.rows[0] || null;
+}
+
+async function resolveTenantFromRequest(req) {
+  const slug = String(req.headers['x-tenant-slug'] || req.query.tenant_slug || req.body?.tenant_slug || DEFAULT_TENANT_SLUG).trim() || DEFAULT_TENANT_SLUG;
+  const id = String(req.headers['x-tenant-id'] || req.query.tenant_id || req.body?.tenant_id || '').trim();
+  const params = [];
+  let where = '';
+  if (id) { params.push(id); where = 'id=$1::uuid'; }
+  else { params.push(slug); where = 'slug=$1'; }
+  const result = await query(`SELECT id, business_name, slug, logo_url, cover_image_url, tagline_ar, description_ar, primary_color, secondary_color, accent_color, contact_phone, whatsapp_number, support_phone, support_email, subscription_plan, subscription_status, status, public_booking_enabled FROM tenants WHERE ${where} LIMIT 1`, params);
+  return result.rows[0] || await getDefaultTenant();
+}
+
+function tenantAware(req, res, next) {
+  resolveTenantFromRequest(req).then((tenant) => {
+    req.tenant = tenant;
+    return runWithTenantContext({ tenantId: tenant?.id || null, tenantSlug: tenant?.slug || DEFAULT_TENANT_SLUG }, () => next());
+  }).catch(next);
+}
+
+function requireSuperAdmin(req, res, next) {
+  if (req.admin?.role !== 'super_admin') return res.status(403).json({ error: 'Super Admin access required' });
+  return next();
+}
+
+function publicTenantView(tenant) {
+  if (!tenant) return null;
+  return {
+    id: tenant.id,
+    business_name: tenant.business_name,
+    slug: tenant.slug,
+    logo_url: tenant.logo_url || null,
+    cover_image_url: tenant.cover_image_url || null,
+    tagline_ar: tenant.tagline_ar || 'خدمات تجميل منزلية',
+    description_ar: tenant.description_ar || 'احجزي خدمات التجميل المنزلية بسهولة.',
+    primary_color: tenant.primary_color || '#E6C7C2',
+    secondary_color: tenant.secondary_color || '#FFFDF8',
+    accent_color: tenant.accent_color || '#DCC5A3',
+    contact_phone: tenant.contact_phone || tenant.support_phone || null,
+    whatsapp_number: tenant.whatsapp_number || tenant.contact_phone || null,
+    support_email: tenant.support_email || tenant.contact_email || null,
+    status: tenant.status,
+    public_booking_enabled: tenant.public_booking_enabled !== false
+  };
+}
+
 function signCustomerToken(customer) {
-  return jwt.sign({ id: customer.id, phone: customer.phone, name: customer.name, scope: 'customer' }, JWT_SECRET, { expiresIn: '7d', issuer: 'beauty-home-service', audience: 'beauty-customer', subject: customer.id });
+  return jwt.sign({ id: customer.id, phone: customer.phone, name: customer.name, tenant_id: customer.tenant_id, scope: 'customer' }, JWT_SECRET, { expiresIn: '7d', issuer: 'beauty-home-service', audience: 'beauty-customer', subject: customer.id });
 }
 
 function authenticateCustomer(req, res, next) {
@@ -648,45 +718,47 @@ async function initSchemas() {
 async function ensureInitialAdmin() {
   const adminEmail = String(DEFAULT_ADMIN_EMAIL || '').trim().toLowerCase();
   const adminPassword = String(DEFAULT_ADMIN_PASSWORD || '').trim();
-
   if (!adminEmail || !adminPassword) return;
 
+  const defaultTenant = await query(`SELECT id FROM tenants WHERE slug=$1 LIMIT 1`, [DEFAULT_TENANT_SLUG]);
+  const defaultTenantId = defaultTenant.rows[0]?.id || null;
   const existing = await query(
-    `SELECT id, email, password_hash FROM admin_users WHERE LOWER(email)=LOWER($1) LIMIT 1`,
+    `SELECT id, email, password_hash, role FROM admin_users WHERE LOWER(email)=LOWER($1) LIMIT 1`,
     [adminEmail]
   );
 
   if (existing.rows[0]) {
     const currentHash = existing.rows[0].password_hash || '';
-    const passwordMatches = currentHash
-      ? await bcrypt.compare(adminPassword, currentHash).catch(() => false)
-      : false;
-
-    if (!passwordMatches) {
-      const passwordHash = await bcrypt.hash(adminPassword, 12);
-      await query(
-        `UPDATE admin_users SET password_hash=$1, role='admin', status='active', updated_at=NOW() WHERE id=$2::uuid`,
-        [passwordHash, existing.rows[0].id]
-      );
-    } else {
-      await query(
-        `UPDATE admin_users SET role='admin', status='active', updated_at=NOW() WHERE id=$1::uuid`,
-        [existing.rows[0].id]
-      );
-    }
-
+    const passwordMatches = currentHash ? await bcrypt.compare(adminPassword, currentHash).catch(() => false) : false;
+    const passwordHash = passwordMatches ? currentHash : await bcrypt.hash(adminPassword, 12);
+    await query(
+      `UPDATE admin_users SET password_hash=$1, role=CASE WHEN role='super_admin' THEN role ELSE 'tenant_owner' END, status='active', tenant_id=COALESCE(tenant_id,$2::uuid), updated_at=NOW() WHERE id=$3::uuid`,
+      [passwordHash, defaultTenantId, existing.rows[0].id]
+    );
     return;
   }
 
   const passwordHash = await bcrypt.hash(adminPassword, 12);
   await query(
-    `INSERT INTO admin_users (name, email, password_hash, role, status) VALUES ($1,$2,$3,'admin','active')`,
-    ['System Admin', adminEmail, passwordHash]
+    `INSERT INTO admin_users (name, email, password_hash, role, status, tenant_id) VALUES ($1,$2,$3,'tenant_owner','active',$4)`,
+    ['System Admin', adminEmail, passwordHash, defaultTenantId]
   );
+}
+
+async function ensureSuperAdmin() {
+  if (!SUPER_ADMIN_EMAIL || !SUPER_ADMIN_PASSWORD) return;
+  const existing = await query(`SELECT id, password_hash FROM admin_users WHERE LOWER(email)=LOWER($1) LIMIT 1`, [SUPER_ADMIN_EMAIL]);
+  const passwordHash = await bcrypt.hash(SUPER_ADMIN_PASSWORD, 12);
+  if (existing.rows[0]) {
+    await query(`UPDATE admin_users SET password_hash=$1, role='super_admin', tenant_id=NULL, status='active', updated_at=NOW() WHERE id=$2::uuid`, [passwordHash, existing.rows[0].id]);
+    return;
+  }
+  await query(`INSERT INTO admin_users (name, email, password_hash, role, status, tenant_id) VALUES ($1,$2,$3,'super_admin','active',NULL)`, ['Super Admin', SUPER_ADMIN_EMAIL, passwordHash]);
 }
 
 await runMigrations();
 await ensureInitialAdmin();
+await ensureSuperAdmin();
 
 
 async function findOrCreateRegion(regionName) {
@@ -745,7 +817,15 @@ function selectNameExpression(alias, fallback = 'name') {
 
 
 function signAdminToken(user) {
-  return jwt.sign({ id: user.id, email: user.email, role: user.role, name: user.name, scope: 'admin' }, JWT_SECRET, { expiresIn: '8h', issuer: 'beauty-home-service', audience: 'beauty-admin', subject: user.id });
+  return jwt.sign({
+    id: user.id,
+    email: user.email,
+    role: user.role,
+    name: user.name,
+    tenant_id: user.tenant_id || null,
+    tenant_slug: user.tenant_slug || null,
+    scope: 'admin'
+  }, JWT_SECRET, { expiresIn: '8h', issuer: 'beauty-home-service', audience: 'beauty-admin', subject: user.id });
 }
 
 async function authenticateAdmin(req, res, next) {
@@ -755,14 +835,21 @@ async function authenticateAdmin(req, res, next) {
   try {
     const payload = jwt.verify(token, JWT_SECRET, { issuer: 'beauty-home-service', audience: 'beauty-admin' });
     if (payload.scope !== 'admin') return res.status(401).json({ error: 'Invalid admin token' });
-    const active = await query(`SELECT id, email, role, name FROM admin_users WHERE id=$1::uuid AND status='active'`, [payload.id]);
+    const active = await query(`SELECT u.id, u.email, u.role, u.name, u.tenant_id, t.slug AS tenant_slug, t.business_name AS tenant_name, t.status AS tenant_status
+      FROM admin_users u
+      LEFT JOIN tenants t ON t.id=u.tenant_id
+      WHERE u.id=$1::uuid AND u.status='active'`, [payload.id]);
     if (!active.rows[0]) return res.status(401).json({ error: 'Admin account is inactive' });
+    if (active.rows[0].role !== 'super_admin' && active.rows[0].tenant_status && active.rows[0].tenant_status !== 'active') return res.status(403).json({ error: 'Tenant account is inactive' });
     req.admin = active.rows[0];
+    if (req.admin.role !== 'super_admin' && req.admin.tenant_id) req.tenant = { id: req.admin.tenant_id, slug: req.admin.tenant_slug, business_name: req.admin.tenant_name };
     return next();
   } catch (_) {
     return res.status(401).json({ error: 'Invalid or expired admin session' });
   }
 }
+
+app.use(tenantAware);
 
 app.post('/api/admin/login', async (req, res) => {
   try {
@@ -784,28 +871,29 @@ app.post('/api/admin/login', async (req, res) => {
 
     if (adminEmail && adminPassword && inputEmail === adminEmail && inputPassword === adminPassword) {
       const existing = await query(
-        `SELECT id, name, email, role, status FROM admin_users WHERE LOWER(email)=LOWER($1) LIMIT 1`,
+        `SELECT u.id, u.name, u.email, u.role, u.status, u.tenant_id, t.slug AS tenant_slug FROM admin_users u LEFT JOIN tenants t ON t.id=u.tenant_id WHERE LOWER(u.email)=LOWER($1) LIMIT 1`,
         [adminEmail]
       );
 
       if (existing.rows[0]) {
         user = existing.rows[0];
 
-        if (user.status !== 'active' || user.role !== 'admin') {
+        if (user.status !== 'active' || !['tenant_owner','admin','super_admin'].includes(user.role)) {
           await query(
-            `UPDATE admin_users SET role='admin', status='active', updated_at=NOW() WHERE id=$1::uuid`,
-            [user.id]
+            `UPDATE admin_users SET role=CASE WHEN role='super_admin' THEN role ELSE 'tenant_owner' END, status='active', tenant_id=COALESCE(tenant_id,$2::uuid), updated_at=NOW() WHERE id=$1::uuid`,
+            [user.id, req.tenant?.id || null]
           );
-          user.role = 'admin';
+          user.role = user.role === 'super_admin' ? 'super_admin' : 'tenant_owner';
+          user.tenant_id = user.tenant_id || req.tenant?.id || null;
           user.status = 'active';
         }
       } else {
         const passwordHash = await bcrypt.hash(adminPassword, 12);
         const created = await query(
-          `INSERT INTO admin_users (name, email, password_hash, role, status)
-           VALUES ($1,$2,$3,'admin','active')
-           RETURNING id, name, email, role, status`,
-          ['System Admin', adminEmail, passwordHash]
+          `INSERT INTO admin_users (name, email, password_hash, role, status, tenant_id)
+           VALUES ($1,$2,$3,'tenant_owner','active',$4)
+           RETURNING id, name, email, role, status, tenant_id`,
+          ['System Admin', adminEmail, passwordHash, req.tenant?.id || null]
         );
         user = created.rows[0];
       }
@@ -813,9 +901,10 @@ app.post('/api/admin/login', async (req, res) => {
 
     if (!user) {
       const dbUser = await query(
-        `SELECT id, name, email, password_hash, role, status
-         FROM admin_users
-         WHERE LOWER(email)=LOWER($1) AND status='active'
+        `SELECT u.id, u.name, u.email, u.password_hash, u.role, u.status, u.tenant_id, t.slug AS tenant_slug
+         FROM admin_users u
+         LEFT JOIN tenants t ON t.id=u.tenant_id
+         WHERE LOWER(u.email)=LOWER($1) AND u.status='active'
          LIMIT 1`,
         [inputEmail]
       );
@@ -835,8 +924,10 @@ app.post('/api/admin/login', async (req, res) => {
     const token = signAdminToken({
       id: user.id,
       email: String(user.email || inputEmail).trim().toLowerCase(),
-      role: user.role || 'admin',
-      name: user.name || 'Admin'
+      role: user.role || 'tenant_owner',
+      name: user.name || 'Admin',
+      tenant_id: user.tenant_id || req.tenant?.id || null,
+      tenant_slug: user.tenant_slug || req.tenant?.slug || null
     });
 
     res.json({
@@ -846,7 +937,9 @@ app.post('/api/admin/login', async (req, res) => {
         id: user.id,
         name: user.name || 'Admin',
         email: String(user.email || inputEmail).trim().toLowerCase(),
-        role: user.role || 'admin'
+        role: user.role || 'tenant_owner',
+        tenant_id: user.tenant_id || req.tenant?.id || null,
+        tenant_slug: user.tenant_slug || req.tenant?.slug || null
       }
     });
   } catch (error) {
@@ -858,9 +951,26 @@ app.post('/api/admin/login', async (req, res) => {
 });
 
 app.get(['/api/health', '/health'], (req, res) => {
-  res.json({ ok: true, app: 'Beauty Home Service API', version: 'v2.3' });
+  res.json({ ok: true, app: 'واجهة برمجة بيوتي هوم سيرفس', version: 'v2.3' });
 });
 
+
+app.get(['/api/tenant', '/api/public/tenant'], async (req, res) => {
+  try {
+    if (!req.tenant || req.tenant.status !== 'active') return res.status(404).json({ error: 'الشركة غير متاحة حالياً' });
+    res.json(publicTenantView(req.tenant));
+  } catch (error) { res.status(500).json({ error: 'تعذر تحميل بيانات الشركة', details: error.message }); }
+});
+
+app.get('/api/public/tenants/:slug', async (req, res) => {
+  try {
+    const slug = String(req.params.slug || '').trim().toLowerCase();
+    const result = await query(`SELECT id, business_name, slug, logo_url, cover_image_url, tagline_ar, description_ar, primary_color, secondary_color, accent_color, contact_phone, whatsapp_number, support_phone, support_email, contact_email, status, public_booking_enabled FROM tenants WHERE slug=$1 LIMIT 1`, [slug]);
+    const tenant = result.rows[0];
+    if (!tenant || tenant.status !== 'active') return res.status(404).json({ error: 'الشركة غير متاحة حالياً' });
+    res.json(publicTenantView(tenant));
+  } catch (error) { res.status(500).json({ error: 'تعذر تحميل بيانات الشركة', details: error.message }); }
+});
 
 app.get('/api/regions', async (req, res) => {
   const result = await query(`SELECT * FROM regions WHERE status='active' ORDER BY sort_order, name_ar`);
@@ -918,6 +1028,13 @@ app.get('/api/service-categories', async (req, res) => {
   res.json(result.rows);
 });
 
+app.get('/api/occasion-types', async (req, res) => {
+  try {
+    const result = await listOccasionTypes(false);
+    res.json(result.rows);
+  } catch (error) { if (!validationResponse(error, res)) res.status(500).json({ error: 'Failed to load occasion types', details: error.message }); }
+});
+
 app.get('/api/services', async (req, res) => {
   try {
     const params = [];
@@ -937,14 +1054,15 @@ app.get('/api/services', async (req, res) => {
 app.get('/api/customer/catalog', async (req, res) => {
   try {
     await ensureDefaultServiceCategories();
-    const [regions, cities, districts, categories, services] = await Promise.all([
+    const [regions, cities, districts, categories, services, occasionTypes] = await Promise.all([
       query(`SELECT * FROM regions WHERE status='active' ORDER BY sort_order, name_ar`),
       query(`SELECT * FROM cities WHERE status='active' ORDER BY sort_order, name_ar`),
       query(`SELECT * FROM districts WHERE status='active' ORDER BY sort_order, name_ar`),
       query(`SELECT * FROM service_categories WHERE status='active' ORDER BY sort_order, name_ar`),
-      query(`SELECT s.*, COALESCE(s.name_ar, s.name) AS display_name, sc.name_ar AS category_name FROM services s LEFT JOIN service_categories sc ON sc.id=s.category_id WHERE s.status='active' ORDER BY sc.sort_order, s.sort_order, COALESCE(s.name_ar, s.name)`)
+      query(`SELECT s.*, COALESCE(s.name_ar, s.name) AS display_name, sc.name_ar AS category_name FROM services s LEFT JOIN service_categories sc ON sc.id=s.category_id WHERE s.status='active' ORDER BY sc.sort_order, s.sort_order, COALESCE(s.name_ar, s.name)`),
+      listOccasionTypes(false)
     ]);
-    res.json({ regions: regions.rows, cities: cities.rows, districts: districts.rows, service_categories: categories.rows, services: services.rows });
+    res.json({ regions: regions.rows, cities: cities.rows, districts: districts.rows, service_categories: categories.rows, services: services.rows, occasion_types: occasionTypes.rows });
   } catch (error) {
     res.status(500).json({ error: 'Failed to load customer catalog', details: error.message });
   }
@@ -1092,9 +1210,215 @@ async function listBackupFiles() {
   return files.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
 }
 
+
+app.use('/api/super-admin', authenticateAdmin, requireSuperAdmin, (req, res, next) => runWithTenantContext({ role: 'super_admin' }, () => next()));
+
+
+function tenantSlug(value) {
+  return String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9-]+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-+|-+$/g, '');
+}
+
+async function writeAuditLog({ actor, tenantId = null, action, entityType, entityId = null, details = {} }) {
+  try {
+    if (!action || !entityType) return;
+    await query(
+      `INSERT INTO audit_logs (tenant_id, actor_admin_id, actor_email, actor_role, action, entity_type, entity_id, details)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb)`,
+      [tenantId, actor?.id || null, actor?.email || null, actor?.role || null, action, entityType, entityId, JSON.stringify(details || {})]
+    );
+  } catch (error) {
+    console.warn('audit_log_failed', error.message);
+  }
+}
+
+const tenantReturnColumns = `t.*,
+  (SELECT COUNT(*)::int FROM bookings b WHERE b.tenant_id=t.id) AS bookings_count,
+  (SELECT COUNT(*)::int FROM artists a WHERE a.tenant_id=t.id) AS artists_count,
+  (SELECT COUNT(*)::int FROM services s WHERE s.tenant_id=t.id) AS services_count,
+  (SELECT COUNT(*)::int FROM admin_users u WHERE u.tenant_id=t.id AND u.status='active') AS admins_count,
+  (SELECT u.email FROM admin_users u WHERE u.tenant_id=t.id AND u.role IN ('tenant_owner','admin') ORDER BY CASE WHEN u.role='tenant_owner' THEN 0 ELSE 1 END, u.created_at ASC LIMIT 1) AS owner_email,
+  (SELECT u.name FROM admin_users u WHERE u.tenant_id=t.id AND u.role IN ('tenant_owner','admin') ORDER BY CASE WHEN u.role='tenant_owner' THEN 0 ELSE 1 END, u.created_at ASC LIMIT 1) AS owner_name`;
+
+app.get('/api/super-admin/tenants', async (req, res) => {
+  try {
+    const result = await query(`SELECT ${tenantReturnColumns} FROM tenants t ORDER BY t.created_at DESC`);
+    res.json(result.rows);
+  } catch (error) { res.status(500).json({ error: 'تعذر تحميل الشركات', details: error.message }); }
+});
+
+app.get('/api/super-admin/tenants/:id', async (req, res) => {
+  try {
+    assertUuid(req.params.id, 'id');
+    const tenantResult = await query(`SELECT ${tenantReturnColumns} FROM tenants t WHERE t.id=$1::uuid LIMIT 1`, [req.params.id]);
+    if (!tenantResult.rows[0]) return res.status(404).json({ error: 'الشركة غير موجودة' });
+    const admins = await query(`SELECT id, name, email, role, status, created_at, updated_at, last_login_at FROM admin_users WHERE tenant_id=$1::uuid ORDER BY created_at ASC`, [req.params.id]);
+    res.json({ ...tenantResult.rows[0], admins: admins.rows });
+  } catch (error) { res.status(500).json({ error: 'تعذر تحميل تفاصيل الشركة', details: error.message }); }
+});
+
+app.post('/api/super-admin/tenants', async (req, res) => {
+  try {
+    const b = req.body || {};
+    const slug = tenantSlug(b.slug);
+    const businessName = String(b.business_name || '').trim();
+    if (!businessName || !slug) return res.status(400).json({ error: 'اسم الشركة والرابط المختصر مطلوبان' });
+
+    const ownerEmail = String(b.owner_email || b.admin_email || '').trim().toLowerCase();
+    const ownerPassword = String(b.owner_password || b.admin_password || '').trim();
+    const ownerName = String(b.owner_name || b.admin_name || businessName).trim();
+    if (!ownerEmail || !ownerPassword) return res.status(400).json({ error: 'يجب إدخال بريد وكلمة مرور مدير الشركة' });
+    if (ownerPassword.length < 8) return res.status(400).json({ error: 'كلمة مرور مدير الشركة يجب أن تكون 8 أحرف على الأقل' });
+
+    const created = await transaction(async (client) => {
+      const tenantResult = await client.query(`INSERT INTO tenants (business_name, slug, contact_email, contact_phone, logo_url, cover_image_url, tagline_ar, description_ar, primary_color, secondary_color, accent_color, whatsapp_number, support_email, public_booking_enabled, subscription_plan, subscription_status, status, onboarding_status, onboarding_notes)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,COALESCE($9,'#E6C7C2'),COALESCE($10,'#FFFDF8'),COALESCE($11,'#DCC5A3'),$12,$13,COALESCE($14,true),COALESCE($15,'starter'),COALESCE($16,'active'),COALESCE($17,'active'),COALESCE($18,'pending_setup'),$19)
+        RETURNING *`,
+        [businessName, slug, nullable(b.contact_email || ownerEmail), nullable(b.contact_phone), nullable(b.logo_url), nullable(b.cover_image_url), nullable(b.tagline_ar), nullable(b.description_ar), b.primary_color || '#E6C7C2', b.secondary_color || '#FFFDF8', b.accent_color || '#DCC5A3', nullable(b.whatsapp_number), nullable(b.support_email || b.contact_email || ownerEmail), b.public_booking_enabled !== false, b.subscription_plan || 'starter', b.subscription_status || 'active', b.status || 'active', b.onboarding_status || 'pending_setup', nullable(b.onboarding_notes)]);
+      const tenant = tenantResult.rows[0];
+      const existingAdmin = await client.query(`SELECT id FROM admin_users WHERE LOWER(email)=LOWER($1) LIMIT 1`, [ownerEmail]);
+      const passwordHash = await bcrypt.hash(ownerPassword, 12);
+      let admin;
+      if (existingAdmin.rows[0]) {
+        const updatedAdmin = await client.query(
+          `UPDATE admin_users SET name=$1, password_hash=$2, role='tenant_owner', status='active', tenant_id=$3::uuid, updated_at=NOW() WHERE id=$4::uuid RETURNING id, name, email, role, status, tenant_id`,
+          [ownerName, passwordHash, tenant.id, existingAdmin.rows[0].id]
+        );
+        admin = updatedAdmin.rows[0];
+      } else {
+        const adminResult = await client.query(
+          `INSERT INTO admin_users (name, email, password_hash, role, status, tenant_id) VALUES ($1,$2,$3,'tenant_owner','active',$4::uuid) RETURNING id, name, email, role, status, tenant_id`,
+          [ownerName, ownerEmail, passwordHash, tenant.id]
+        );
+        admin = adminResult.rows[0];
+      }
+      return { tenant, admin };
+    });
+
+    await writeAuditLog({ actor: req.admin, tenantId: created.tenant.id, action: 'tenant_created', entityType: 'tenant', entityId: created.tenant.id, details: { business_name: businessName, slug, owner_email: ownerEmail, plan: b.subscription_plan || 'starter' } });
+    res.status(201).json(created);
+  } catch (error) {
+    const msg = error.code === '23505' ? 'الرابط المختصر أو بريد المدير مستخدم مسبقاً' : 'تعذر إنشاء الشركة';
+    res.status(500).json({ error: msg, details: error.message });
+  }
+});
+
+app.patch('/api/super-admin/tenants/:id', async (req, res) => {
+  try {
+    assertUuid(req.params.id, 'id');
+    const fields = ['business_name','logo_url','cover_image_url','tagline_ar','tagline_en','description_ar','description_en','primary_color','secondary_color','accent_color','contact_phone','whatsapp_number','support_phone','support_email','contact_email','public_booking_enabled','subscription_plan','subscription_status','status','onboarding_status','onboarding_notes'];
+    const columns = fields.filter(f => req.body?.[f] !== undefined);
+    if (!columns.length) return res.status(400).json({ error: 'No fields sent' });
+    const sets = columns.map((f,i) => `${f}=$${i+1}`).join(', ');
+    const values = columns.map(f => req.body[f] === '' ? null : req.body[f]);
+    values.push(req.params.id);
+    const result = await query(`UPDATE tenants SET ${sets}, updated_at=NOW() WHERE id=$${values.length}::uuid RETURNING *`, values);
+    if (!result.rows[0]) return res.status(404).json({ error: 'Tenant not found' });
+    await writeAuditLog({ actor: req.admin, tenantId: req.params.id, action: 'tenant_updated', entityType: 'tenant', entityId: req.params.id, details: { fields: columns } });
+    res.json(result.rows[0]);
+  } catch (error) { res.status(500).json({ error: 'Failed to update tenant', details: error.message }); }
+});
+
+app.post('/api/super-admin/tenants/:id/admin-users', async (req, res) => {
+  try {
+    assertUuid(req.params.id, 'id');
+    const b = req.body || {};
+    const name = String(b.name || 'مدير الشركة').trim();
+    const email = String(b.email || '').trim().toLowerCase();
+    const password = String(b.password || '').trim();
+    const role = ['tenant_owner','admin','booking_manager'].includes(b.role) ? b.role : 'tenant_owner';
+    if (!email || !password) return res.status(400).json({ error: 'البريد وكلمة المرور مطلوبان' });
+    if (password.length < 8) return res.status(400).json({ error: 'كلمة المرور يجب أن تكون 8 أحرف على الأقل' });
+    const tenant = await query(`SELECT id, business_name FROM tenants WHERE id=$1::uuid LIMIT 1`, [req.params.id]);
+    if (!tenant.rows[0]) return res.status(404).json({ error: 'الشركة غير موجودة' });
+    const passwordHash = await bcrypt.hash(password, 12);
+    const result = await query(
+      `INSERT INTO admin_users (name, email, password_hash, role, status, tenant_id) VALUES ($1,$2,$3,$4,'active',$5::uuid)
+       ON CONFLICT (email) DO UPDATE SET name=EXCLUDED.name, password_hash=EXCLUDED.password_hash, role=EXCLUDED.role, status='active', tenant_id=EXCLUDED.tenant_id, updated_at=NOW()
+       RETURNING id, name, email, role, status, tenant_id`,
+      [name, email, passwordHash, role, req.params.id]
+    );
+    await writeAuditLog({ actor: req.admin, tenantId: req.params.id, action: 'tenant_admin_saved', entityType: 'admin_user', entityId: result.rows[0].id, details: { email, role } });
+    res.status(201).json(result.rows[0]);
+  } catch (error) { res.status(500).json({ error: 'تعذر إنشاء مدير الشركة', details: error.message }); }
+});
+
+app.patch('/api/super-admin/tenants/:id/admin-users/:userId', async (req, res) => {
+  try {
+    assertUuid(req.params.id, 'id');
+    assertUuid(req.params.userId, 'userId');
+    const fields = [];
+    const values = [];
+    const allowed = ['name','role','status'];
+    for (const f of allowed) {
+      if (req.body?.[f] !== undefined) { fields.push(`${f}=$${values.length+1}`); values.push(req.body[f]); }
+    }
+    if (req.body?.password) { fields.push(`password_hash=$${values.length+1}`); values.push(await bcrypt.hash(String(req.body.password), 12)); }
+    if (!fields.length) return res.status(400).json({ error: 'لا توجد بيانات للتحديث' });
+    values.push(req.params.id, req.params.userId);
+    const result = await query(`UPDATE admin_users SET ${fields.join(', ')}, updated_at=NOW() WHERE tenant_id=$${values.length-1}::uuid AND id=$${values.length}::uuid RETURNING id, name, email, role, status, tenant_id`, values);
+    if (!result.rows[0]) return res.status(404).json({ error: 'المستخدم غير موجود' });
+    await writeAuditLog({ actor: req.admin, tenantId: req.params.id, action: 'tenant_admin_updated', entityType: 'admin_user', entityId: req.params.userId, details: { fields } });
+    res.json(result.rows[0]);
+  } catch (error) { res.status(500).json({ error: 'تعذر تحديث مدير الشركة', details: error.message }); }
+});
+
+app.get('/api/super-admin/audit-logs', async (req, res) => {
+  try {
+    const tenantId = req.query.tenant_id ? String(req.query.tenant_id) : null;
+    const params = [];
+    let where = '';
+    if (tenantId) { assertUuid(tenantId, 'tenant_id'); params.push(tenantId); where = 'WHERE l.tenant_id=$1::uuid'; }
+    const result = await query(`SELECT l.*, t.business_name AS tenant_name FROM audit_logs l LEFT JOIN tenants t ON t.id=l.tenant_id ${where} ORDER BY l.created_at DESC LIMIT 200`, params);
+    res.json(result.rows);
+  } catch (error) { res.status(500).json({ error: 'تعذر تحميل سجل العمليات', details: error.message }); }
+});
+
+app.get('/api/super-admin/plans', async (req, res) => {
+  try { const result = await query(`SELECT * FROM subscription_plans ORDER BY monthly_price, code`); res.json(result.rows); }
+  catch (error) { res.status(500).json({ error: 'Failed to load plans', details: error.message }); }
+});
+
+app.get('/api/admin/tenant', authenticateAdmin, async (req, res) => {
+  try {
+    if (req.admin.role === 'super_admin' && req.query.tenant_id) {
+      const result = await runWithTenantContext({ role: 'super_admin' }, () => query(`SELECT * FROM tenants WHERE id=$1::uuid LIMIT 1`, [req.query.tenant_id]));
+      return res.json(result.rows[0] || null);
+    }
+    if (!req.admin.tenant_id) return res.status(400).json({ error: 'لا يوجد tenant مرتبط بحساب المدير' });
+    const result = await runWithTenantContext({ role: 'super_admin' }, () => query(`SELECT * FROM tenants WHERE id=$1::uuid LIMIT 1`, [req.admin.tenant_id]));
+    res.json(result.rows[0] || null);
+  } catch (error) { res.status(500).json({ error: 'تعذر تحميل إعدادات الشركة', details: error.message }); }
+});
+
+app.patch('/api/admin/tenant', authenticateAdmin, async (req, res) => {
+  try {
+    if (!['tenant_owner','admin','super_admin'].includes(req.admin.role)) return res.status(403).json({ error: 'غير مصرح' });
+    const tenantId = req.admin.role === 'super_admin' && req.body?.tenant_id ? req.body.tenant_id : req.admin.tenant_id;
+    if (!tenantId) return res.status(400).json({ error: 'لا يوجد tenant لتعديله' });
+    const fields = ['business_name','logo_url','cover_image_url','tagline_ar','description_ar','primary_color','secondary_color','accent_color','contact_phone','whatsapp_number','support_phone','support_email','public_booking_enabled'];
+    const columns = fields.filter(f => req.body?.[f] !== undefined);
+    if (!columns.length) return res.status(400).json({ error: 'لا توجد حقول للتحديث' });
+    const sets = columns.map((f,i) => `${f}=$${i+1}`).join(', ');
+    const values = columns.map(f => req.body[f] === '' ? null : req.body[f]);
+    values.push(tenantId);
+    const result = await runWithTenantContext({ role: 'super_admin' }, () => query(`UPDATE tenants SET ${sets}, updated_at=NOW() WHERE id=$${values.length}::uuid RETURNING *`, values));
+    res.json(result.rows[0]);
+  } catch (error) { res.status(500).json({ error: 'تعذر تحديث إعدادات الشركة', details: error.message }); }
+});
+
 app.use('/api/admin', (req, res, next) => {
   if (req.path === '/login') return next();
-  return authenticateAdmin(req, res, next);
+  return authenticateAdmin(req, res, () => {
+    const selectedTenantId = req.admin?.role === 'super_admin'
+      ? (req.headers['x-tenant-id'] || req.query.tenant_id || req.tenant?.id || null)
+      : (req.admin?.tenant_id || req.tenant?.id || null);
+    return runWithTenantContext({ tenantId: selectedTenantId, tenantSlug: req.admin?.tenant_slug || req.tenant?.slug || DEFAULT_TENANT_SLUG, role: req.admin?.role || 'tenant_admin' }, () => next());
+  });
 });
 
 app.get('/api/admin/backups', async (req, res) => {
@@ -1151,7 +1475,10 @@ app.get('/api/admin/dashboard', async (req, res) => {
   }
 });
 
-async function bookingsQuery(where = '', params = []) {
+async function bookingsQuery(where = '', params = [], options = {}) {
+  const limit = Math.min(Math.max(parseInt(options.limit || 0, 10) || 0, 0), 300);
+  const offset = Math.max(parseInt(options.offset || 0, 10) || 0, 0);
+  const pageSql = limit ? ` LIMIT ${limit} OFFSET ${offset}` : '';
   return query(`
     SELECT b.*, c.name AS customer_name, c.phone AS customer_phone,
       r.name_ar AS region_name, city.name_ar AS city_name, d.name_ar AS district_name,
@@ -1170,12 +1497,15 @@ async function bookingsQuery(where = '', params = []) {
     LEFT JOIN artists a ON a.id=b.assigned_artist_id
     LEFT JOIN artists pa ON pa.id=b.preferred_artist_id
     ${where}
-    ORDER BY b.created_at DESC
+    ORDER BY b.created_at DESC${pageSql}
   `, params);
 }
 
 app.get('/api/admin/bookings', async (req, res) => {
-  try { const result = await bookingsQuery(); res.json(result.rows); }
+  try {
+    const result = await bookingsQuery('', [], { limit: req.query.limit, offset: req.query.offset });
+    res.json(result.rows);
+  }
   catch (error) { res.status(500).json({ error: 'Failed to load bookings', details: error.message }); }
 });
 
@@ -1417,6 +1747,28 @@ async function listCities(all = false) {
 async function listDistricts(all = false) {
   return query(`SELECT d.*, c.name_ar AS city_name, r.name_ar AS region_name FROM districts d LEFT JOIN cities c ON c.id=d.city_id LEFT JOIN regions r ON r.id=c.region_id ${all ? '' : `WHERE d.status='active'`} ORDER BY r.sort_order, c.sort_order, d.sort_order, d.name_ar`);
 }
+async function ensureDefaultOccasionTypes() {
+  const existing = await query(`SELECT COUNT(*)::int AS count FROM occasion_types`);
+  if (existing.rows[0]?.count > 0) return;
+  const occasions = [
+    ['زواج', 'Wedding', 'مناسبة زواج أو حفل رئيسي'],
+    ['خطوبة', 'Engagement', 'مناسبة خطوبة'],
+    ['ملكة', 'Katb Kitab', 'مناسبة ملكة أو عقد قران'],
+    ['تخرج', 'Graduation', 'مناسبة تخرج'],
+    ['عيد', 'Eid', 'مناسبة عيد'],
+    ['جلسة تصوير', 'Photoshoot', 'جلسة تصوير خاصة'],
+    ['زيارة منزلية', 'Home Visit', 'خدمة منزلية عامة'],
+    ['مناسبة خاصة', 'Private Occasion', 'مناسبة خاصة أخرى'],
+  ];
+  for (let i = 0; i < occasions.length; i++) {
+    await query(`INSERT INTO occasion_types (name_ar, name_en, description, sort_order, status) VALUES ($1,$2,$3,$4,'active')`, [...occasions[i], i + 1]);
+  }
+}
+async function listOccasionTypes(all = false) {
+  await ensureDefaultOccasionTypes();
+  return query(`SELECT * FROM occasion_types ${all ? '' : `WHERE status='active'`} ORDER BY sort_order, name_ar`);
+}
+
 async function listServiceCategories(all = false) {
   await ensureDefaultServiceCategories();
   return query(`SELECT * FROM service_categories ${all ? '' : `WHERE status='active'`} ORDER BY sort_order, name_ar`);
@@ -1428,8 +1780,8 @@ async function listServices(all = false) {
 app.get('/api/admin/catalog', async (req, res) => {
   try {
     const all = req.query.all !== '0';
-    const [regions, cities, districts, categories, services] = await Promise.all([listRegions(all), listCities(all), listDistricts(all), listServiceCategories(all), listServices(all)]);
-    res.json({ regions: regions.rows, cities: cities.rows, districts: districts.rows, service_categories: categories.rows, services: services.rows });
+    const [regions, cities, districts, categories, services, occasionTypes] = await Promise.all([listRegions(all), listCities(all), listDistricts(all), listServiceCategories(all), listServices(all), listOccasionTypes(all)]);
+    res.json({ regions: regions.rows, cities: cities.rows, districts: districts.rows, service_categories: categories.rows, services: services.rows, occasion_types: occasionTypes.rows });
   } catch (error) { res.status(500).json({ error: 'Failed to load catalog', details: error.message }); }
 });
 
@@ -1484,7 +1836,7 @@ function catalogRoutes(name, table, fields, listFn) {
 async function validateCatalogPayload(table, body, partial) {
   if (body.status !== undefined && !['active','inactive'].includes(body.status)) throw new ApiValidationError('Invalid catalog status', { status: 'invalid' });
   if (body.sort_order !== undefined && (!Number.isInteger(Number(body.sort_order)) || Number(body.sort_order) < 0)) throw new ApiValidationError('sort_order must be a non-negative integer', { sort_order: 'invalid' });
-  if (!partial && ['regions','cities','districts','service_categories','services'].includes(table) && !String(body.name_ar || '').trim()) {
+  if (!partial && ['regions','cities','districts','service_categories','services','occasion_types'].includes(table) && !String(body.name_ar || '').trim()) {
     throw new ApiValidationError('Arabic name is required', { name_ar: 'required' });
   }
   if (table === 'cities' && (!partial || body.region_id !== undefined)) {
@@ -1515,6 +1867,7 @@ catalogRoutes('regions', 'regions', ['external_id','name_ar','name_en','status',
 catalogRoutes('cities', 'cities', ['region_id','external_id','name_ar','name_en','status','sort_order'], listCities);
 catalogRoutes('districts', 'districts', ['city_id','external_id','name_ar','name_en','status','sort_order'], listDistricts);
 catalogRoutes('service-categories', 'service_categories', ['name_ar','name_en','description','status','sort_order'], listServiceCategories);
+catalogRoutes('occasion-types', 'occasion_types', ['name_ar','name_en','description','status','sort_order'], listOccasionTypes);
 catalogRoutes('services', 'services', ['category_id','name','name_ar','name_en','description','base_price','min_price','max_price','duration_minutes','status','sort_order'], listServices);
 
 
@@ -2115,7 +2468,7 @@ app.post('/api/admin/bookings/:id/whatsapp', async (req, res) => {
       const t = await query(`SELECT * FROM communication_templates WHERE id=$1 LIMIT 1`, [req.body.template_id]);
       body = fillTemplate(t.rows[0]?.body_ar || body, booking);
     }
-    if (!body) body = fillTemplate('مرحباً {customer_name}، بخصوص طلبك رقم {booking_id} في Beauty Home Service.', booking);
+    if (!body) body = fillTemplate('مرحباً {customer_name}، بخصوص طلبك رقم {booking_id} في بيوتي هوم سيرفس.', booking);
     const phone = String(booking.customer_phone || '').replace(/[^0-9+]/g, '');
     const intl = phone.startsWith('0') ? `966${phone.slice(1)}` : phone.replace(/^\+/, '');
     const url = `https://wa.me/${intl}?text=${encodeURIComponent(body)}`;
@@ -2164,7 +2517,7 @@ async function deliverCustomerOtp(phone, otp) {
   const response = await fetch(url, {
     method: 'POST',
     headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
-    body: JSON.stringify({ to: phone, message: `Beauty Home Service OTP: ${otp}`, sender: process.env.SMS_SENDER_ID || 'Beauty' })
+    body: JSON.stringify({ to: phone, message: `رمز تحقق بيوتي هوم سيرفس: ${otp}`, sender: process.env.SMS_SENDER_ID || 'Beauty' })
   });
   if (!response.ok) throw new Error(`SMS provider rejected the request (${response.status})`);
 }
@@ -2330,7 +2683,7 @@ app.post('/api/admin/artist-reviews', async (req, res) => {
 
 const isVercel = !!process.env.VERCEL;
 if (!isVercel && process.env.NODE_ENV !== 'test') {
-  app.listen(PORT, () => console.log(`Beauty Home Service API running on port ${PORT}`));
+  app.listen(PORT, () => console.log(`واجهة برمجة بيوتي هوم سيرفس تعمل على المنفذ ${PORT}`));
 }
 
 export default app;

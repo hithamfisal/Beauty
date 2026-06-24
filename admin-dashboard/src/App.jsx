@@ -24,6 +24,7 @@ import {
   NotebookPen,
   PlusCircle,
   RefreshCw,
+  Save,
   Sparkles,
   Star,
   TrendingUp,
@@ -58,11 +59,25 @@ const paymentOptions = Object.entries(paymentLabels);
 const paymentMethodLabels = {
   cash: "كاش",
   bank_transfer: "تحويل بنكي",
-  stc_pay: "STC Pay",
+  stc_pay: "إس تي سي باي",
   mada: "مدى",
   card: "بطاقة",
   other: "أخرى",
 };
+
+
+const paymentLabelToCode = Object.fromEntries(Object.entries(paymentLabels).map(([code, label]) => [label, code]));
+const paymentMethodLabelToCode = Object.fromEntries(Object.entries(paymentMethodLabels).map(([code, label]) => [label, code]));
+function paymentStatusInputToCode(value, fallback = "unpaid") {
+  const text = String(value || "").trim();
+  if (!text) return fallback;
+  return paymentLabels[text] ? text : paymentLabelToCode[text] || fallback;
+}
+function paymentMethodInputToCode(value, fallback = "bank_transfer") {
+  const text = String(value || "").trim();
+  if (!text) return fallback;
+  return paymentMethodLabels[text] ? text : paymentMethodLabelToCode[text] || fallback;
+}
 
 const emptyBooking = {
   name: "",
@@ -278,6 +293,11 @@ const adminNavigation = [
         label: "أقسام الخدمات والخدمات",
         icon: Sparkles,
       },
+      {
+        id: "occasion-management",
+        label: "أنواع المناسبات",
+        icon: CalendarDays,
+      },
     ],
   },
   {
@@ -300,7 +320,9 @@ const adminNavigation = [
     label: "مدير النظام",
     icon: Database,
     items: [
+      { id: "tenant-settings", label: "هوية الشركة", icon: Sparkles },
       { id: "database-backup", label: "النسخ الاحتياطي", icon: Database },
+      { id: "saas-tenants", label: "الشركات والاشتراكات", icon: Users },
     ],
   },
   {
@@ -330,6 +352,15 @@ function clean(obj) {
   return Object.fromEntries(
     Object.entries(obj).map(([k, v]) => [k, v === "" ? null : v]),
   );
+}
+
+function fileToDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
 }
 
 function formatSaudiPhoneInput(value) {
@@ -407,10 +438,22 @@ function TextInput({
   placeholder,
   type = "text",
   required = false,
+  disabled = false,
 }) {
   return (
     <input
       type={type}
+      value={value ?? ""}
+      placeholder={placeholder}
+      required={required}
+      disabled={disabled}
+      onChange={(e) => onChange(e.target.value)}
+    />
+  );
+}
+function TextArea({ value, onChange, placeholder, required = false }) {
+  return (
+    <textarea
       value={value ?? ""}
       placeholder={placeholder}
       required={required}
@@ -490,7 +533,7 @@ function AdminSidebar({
         <div className="sidebar-brand">
           <div className="brand-mark">B</div>
           <div>
-            <b>Beauty Home Service</b>
+            <b>بيوتي هوم سيرفس</b>
             <small>لوحة الإدارة</small>
           </div>
           <button
@@ -584,6 +627,7 @@ function App() {
     districts: [],
     service_categories: [],
     services: [],
+    occasion_types: [],
   };
   const [catalog, setCatalog] = useState(emptyCatalog);
   const [bookingForm, setBookingForm] = useState(emptyBooking);
@@ -628,13 +672,21 @@ function App() {
   const [backups, setBackups] = useState([]);
   const [backupStatus, setBackupStatus] = useState("");
   const [backupLoading, setBackupLoading] = useState("");
+  const [tenants, setTenants] = useState([]);
+  const [plans, setPlans] = useState([]);
+  const emptyTenantForm = { business_name: "", slug: "", contact_email: "", contact_phone: "", logo_url: "", cover_image_url: "", tagline_ar: "", description_ar: "", primary_color: "#E6C7C2", secondary_color: "#FFFDF8", accent_color: "#DCC5A3", whatsapp_number: "", support_email: "", subscription_plan: "starter", subscription_status: "active", status: "active", onboarding_status: "pending_setup", onboarding_notes: "", owner_name: "", owner_email: "", owner_password: "" };
+  const [tenantForm, setTenantForm] = useState(emptyTenantForm);
+  const [tenantSettings, setTenantSettings] = useState(null);
+  const [selectedTenant, setSelectedTenant] = useState(null);
+  const [tenantAdminForm, setTenantAdminForm] = useState({ name: "", email: "", password: "", role: "tenant_owner" });
+  const [auditLogs, setAuditLogs] = useState([]);
 
   async function api(path, options = {}) {
     const headers = {
       "Content-Type": "application/json; charset=utf-8",
       ...(options.headers || {}),
     };
-    if (adminToken && path.startsWith("/admin"))
+    if (adminToken && (path.startsWith("/admin") || path.startsWith("/super-admin")))
       headers.Authorization = `Bearer ${adminToken}`;
     const res = await fetch(`${API}${path}`, { ...options, headers });
     const text = await res.text();
@@ -642,10 +694,10 @@ function App() {
     try {
       data = text ? JSON.parse(text) : null;
     } catch {
-      data = { error: text?.slice(0, 300) || "Invalid server response" };
+      data = { error: text?.slice(0, 300) || "استجابة غير صالحة من الخادم" };
     }
     if (!res.ok)
-      throw new Error(data?.details || data?.error || "Request failed");
+      throw new Error(data?.details || data?.error || "تعذر تنفيذ الطلب");
     return data;
   }
 
@@ -673,6 +725,7 @@ function App() {
           ? c.service_categories
           : [],
         services: Array.isArray(c?.services) ? c.services : [],
+        occasion_types: Array.isArray(c?.occasion_types) ? c.occasion_types : [],
       });
       setBeauticians(Array.isArray(a) ? a : []);
       setPortfolio(Array.isArray(p) ? p : []);
@@ -734,16 +787,18 @@ function App() {
   }
 
   async function refreshServiceCatalog() {
-    const [categories, services] = await Promise.all([
+    const [categories, services, occasionTypes] = await Promise.all([
       api("/admin/service-categories?all=1"),
       api("/admin/services?all=1"),
+      api("/admin/occasion-types?all=1"),
     ]);
     setCatalog((prev) => ({
       ...prev,
       service_categories: Array.isArray(categories) ? categories : [],
       services: Array.isArray(services) ? services : [],
+      occasion_types: Array.isArray(occasionTypes) ? occasionTypes : [],
     }));
-    return { categories, services };
+    return { categories, services, occasionTypes };
   }
   useEffect(() => {
     if (adminToken) load();
@@ -751,7 +806,108 @@ function App() {
 
   useEffect(() => {
     if (adminToken && activeView === "database-backup") loadBackups();
+    if (adminToken && activeView === "saas-tenants") loadSaasTenants();
+    if (adminToken && activeView === "tenant-settings") loadTenantSettings();
   }, [adminToken, activeView]);
+
+  async function loadSaasTenants() {
+    try {
+      const [tenantRows, planRows, logsRows] = await Promise.all([api("/super-admin/tenants"), api("/super-admin/plans"), api("/super-admin/audit-logs")]);
+      setTenants(Array.isArray(tenantRows) ? tenantRows : []);
+      setPlans(Array.isArray(planRows) ? planRows : []);
+      setAuditLogs(Array.isArray(logsRows) ? logsRows : []);
+    } catch (e) {
+      setMessage(`تعذر تحميل شركات SaaS: ${e.message}`);
+    }
+  }
+
+  async function createTenant(e) {
+    e.preventDefault();
+    try {
+      const created = await api("/super-admin/tenants", { method: "POST", body: JSON.stringify(clean(tenantForm)) });
+      setTenantForm(emptyTenantForm);
+      await loadSaasTenants();
+      if (created?.tenant?.id) await loadTenantDetails(created.tenant.id);
+      setMessage("تم إنشاء الشركة وحساب مديرها بنجاح.");
+    } catch (e) {
+      setMessage(`تعذر إنشاء الشركة: ${e.message}`);
+    }
+  }
+
+  async function loadTenantDetails(id) {
+    try {
+      const data = await api(`/super-admin/tenants/${id}`);
+      setSelectedTenant(data || null);
+      setTenantAdminForm({ name: "", email: "", password: "", role: "tenant_owner" });
+    } catch (e) {
+      setMessage(`تعذر تحميل تفاصيل الشركة: ${e.message}`);
+    }
+  }
+
+  async function saveSelectedTenant(e) {
+    e.preventDefault();
+    if (!selectedTenant?.id) return;
+    try {
+      const updated = await api(`/super-admin/tenants/${selectedTenant.id}`, { method: "PATCH", body: JSON.stringify(clean(selectedTenant)) });
+      setSelectedTenant({ ...(selectedTenant || {}), ...(updated || {}) });
+      await loadSaasTenants();
+      setMessage("تم تحديث بيانات الشركة بنجاح.");
+    } catch (e) {
+      setMessage(`تعذر تحديث بيانات الشركة: ${e.message}`);
+    }
+  }
+
+  async function saveTenantAdmin(e) {
+    e.preventDefault();
+    if (!selectedTenant?.id) return;
+    try {
+      await api(`/super-admin/tenants/${selectedTenant.id}/admin-users`, { method: "POST", body: JSON.stringify(clean(tenantAdminForm)) });
+      await loadTenantDetails(selectedTenant.id);
+      await loadSaasTenants();
+      setMessage("تم حفظ حساب مدير الشركة بنجاح.");
+    } catch (e) {
+      setMessage(`تعذر حفظ حساب مدير الشركة: ${e.message}`);
+    }
+  }
+
+  async function loadTenantSettings() {
+    try {
+      const data = await api("/admin/tenant");
+      setTenantSettings(data || {});
+    } catch (e) {
+      setMessage(`تعذر تحميل هوية الشركة: ${e.message}`);
+    }
+  }
+
+  async function saveTenantSettings(e) {
+    e.preventDefault();
+    try {
+      const updated = await api("/admin/tenant", { method: "PATCH", body: JSON.stringify(clean(tenantSettings || {})) });
+      setTenantSettings(updated || {});
+      setMessage("تم حفظ هوية الشركة بنجاح.");
+    } catch (e) {
+      setMessage(`تعذر حفظ هوية الشركة: ${e.message}`);
+    }
+  }
+
+
+  async function uploadTenantBrandImage(file, targetField) {
+    if (!file) return;
+    try {
+      const dataUrl = await fileToDataUrl(file);
+      const uploaded = await api("/admin/uploads/image", {
+        method: "POST",
+        body: JSON.stringify({
+          image_data_url: dataUrl,
+          folder: targetField === "logo_url" ? "beauty-home-service/branding/logos" : "beauty-home-service/branding/covers",
+        }),
+      });
+      setTenantSettings((prev) => ({ ...(prev || {}), [targetField]: uploaded.url }));
+      setMessage(targetField === "logo_url" ? "تم رفع شعار الشركة بنجاح." : "تم رفع خلفية الشركة بنجاح.");
+    } catch (e) {
+      setMessage(`تعذر رفع الصورة: ${e.message}`);
+    }
+  }
 
   async function login(e) {
     e.preventDefault();
@@ -1067,16 +1223,20 @@ function App() {
   }
 
   async function updatePaymentDetails(b) {
-    const payment_status = prompt(
-      "حالة الدفع: unpaid / deposit_paid / paid / refunded",
-      b.payment_status || "unpaid",
+    const currentPaymentStatus = paymentLabels[b.payment_status] || paymentLabels.unpaid;
+    const currentPaymentMethod = paymentMethodLabels[b.payment_method] || paymentMethodLabels.bank_transfer;
+    const paymentStatusInput = prompt(
+      "حالة الدفع: غير مدفوع / عربون مدفوع / مدفوع بالكامل / مسترجع",
+      currentPaymentStatus,
     );
-    if (payment_status === null) return;
-    const payment_method = prompt(
-      "طريقة الدفع: cash / bank_transfer / stc_pay / mada / card / other",
-      b.payment_method || "bank_transfer",
+    if (paymentStatusInput === null) return;
+    const payment_status = paymentStatusInputToCode(paymentStatusInput, b.payment_status || "unpaid");
+    const paymentMethodInput = prompt(
+      "طريقة الدفع: كاش / تحويل بنكي / إس تي سي باي / مدى / بطاقة / أخرى",
+      currentPaymentMethod,
     );
-    if (payment_method === null) return;
+    if (paymentMethodInput === null) return;
+    const payment_method = paymentMethodInputToCode(paymentMethodInput, b.payment_method || "bank_transfer");
     const payment_reference = prompt(
       "رقم المرجع / التحويل",
       b.payment_reference || "",
@@ -1324,7 +1484,7 @@ function App() {
     return (
       <main dir="rtl" className="login-page">
         <section className="login-card">
-          <h1>Beauty Home Service</h1>
+          <h1>بيوتي هوم سيرفس</h1>
           <p className="muted">تسجيل دخول لوحة الإدارة</p>
           {message && <div className="message">{message}</div>}
           <form onSubmit={login}>
@@ -1375,9 +1535,10 @@ function App() {
           </button>
           <div>
             <h1>{viewTitles[activeView] || "لوحة المعلومات"}</h1>
-            <p>Beauty Home Service</p>
+            <p>بيوتي هوم سيرفس</p>
           </div>
           <div className="header-actions">
+            <span className="muted">{adminUser?.tenant_slug ? `الشركة: ${adminUser.tenant_slug}` : adminUser?.role === 'super_admin' ? 'Super Admin' : ''}</span>
             <span className="muted">{adminUser?.name || adminUser?.email}</span>
             <button onClick={load}>
               <RefreshCw size={17} /> تحديث
@@ -1464,6 +1625,14 @@ function App() {
             setMessage={setMessage}
           />
         )}
+        {activeView === "occasion-management" && (
+          <OccasionTypesPanel
+            catalog={catalog}
+            refreshServiceCatalog={refreshServiceCatalog}
+            api={api}
+            setMessage={setMessage}
+          />
+        )}
 
         {activeView === "location-import" && (
           <section className="panel">
@@ -1487,6 +1656,166 @@ function App() {
             loadBackups={loadBackups}
             downloadBackup={downloadBackup}
           />
+        )}
+
+        {activeView === "tenant-settings" && (
+          <section className="panel">
+            <div className="section-header">
+              <div>
+                <h2>هوية الشركة ورابط الحجز</h2>
+                <p className="muted">هذه البيانات تظهر للعميلات في رابط الحجز الخاص بالشركة وتتحكم في الشعار والألوان والخدمات المعروضة.</p>
+              </div>
+              <button onClick={loadTenantSettings}><RefreshCw size={17} /> تحديث</button>
+            </div>
+            {!tenantSettings ? <div className="empty-state">جاري تحميل بيانات الشركة...</div> : (
+              <form className="form-grid compact-form" onSubmit={saveTenantSettings}>
+                <Field label="اسم الشركة"><TextInput value={tenantSettings.business_name || ""} onChange={(v)=>setTenantSettings({...tenantSettings,business_name:v})} /></Field>
+                <Field label="Slug / رابط الشركة"><TextInput value={tenantSettings.slug || ""} disabled /></Field>
+                <Field label="شعار الشركة">
+                  <div className="brand-upload-control">
+                    <div className="brand-preview logo-preview">
+                      {tenantSettings.logo_url ? <img src={tenantSettings.logo_url} alt="شعار الشركة" /> : <Sparkles size={26} />}
+                    </div>
+                    <div className="brand-upload-body">
+                      <TextInput value={tenantSettings.logo_url || ""} onChange={(v)=>setTenantSettings({...tenantSettings,logo_url:v})} placeholder="سيظهر الرابط هنا بعد الرفع أو يمكن لصق رابط مباشر" />
+                      <label className="file-browse-btn">
+                        <Upload size={16}/> استعراض ورفع الشعار
+                        <input type="file" accept="image/*" onChange={(e)=>uploadTenantBrandImage(e.target.files?.[0], "logo_url")} />
+                      </label>
+                      <small>يفضل شعار PNG بخلفية شفافة أو صورة مربعة واضحة.</small>
+                    </div>
+                  </div>
+                </Field>
+                <Field label="خلفية صفحة الحجز">
+                  <div className="brand-upload-control">
+                    <div className="brand-preview cover-preview">
+                      {tenantSettings.cover_image_url ? <img src={tenantSettings.cover_image_url} alt="خلفية الشركة" /> : <Images size={26} />}
+                    </div>
+                    <div className="brand-upload-body">
+                      <TextInput value={tenantSettings.cover_image_url || ""} onChange={(v)=>setTenantSettings({...tenantSettings,cover_image_url:v})} placeholder="سيظهر الرابط هنا بعد الرفع أو يمكن لصق رابط مباشر" />
+                      <label className="file-browse-btn">
+                        <Upload size={16}/> استعراض ورفع الخلفية
+                        <input type="file" accept="image/*" onChange={(e)=>uploadTenantBrandImage(e.target.files?.[0], "cover_image_url")} />
+                      </label>
+                      <small>يفضل صورة أفقية ناعمة تناسب صفحة الحجز العامة.</small>
+                    </div>
+                  </div>
+                </Field>
+                <Field label="الشعار النصي"><TextInput value={tenantSettings.tagline_ar || ""} onChange={(v)=>setTenantSettings({...tenantSettings,tagline_ar:v})} /></Field>
+                <Field label="وصف الشركة"><TextArea value={tenantSettings.description_ar || ""} onChange={(v)=>setTenantSettings({...tenantSettings,description_ar:v})} /></Field>
+                <Field label="اللون الرئيسي"><TextInput type="color" value={tenantSettings.primary_color || "#E6C7C2"} onChange={(v)=>setTenantSettings({...tenantSettings,primary_color:v})} /></Field>
+                <Field label="لون الخلفية"><TextInput type="color" value={tenantSettings.secondary_color || "#FFFDF8"} onChange={(v)=>setTenantSettings({...tenantSettings,secondary_color:v})} /></Field>
+                <Field label="لون مساعد"><TextInput type="color" value={tenantSettings.accent_color || "#DCC5A3"} onChange={(v)=>setTenantSettings({...tenantSettings,accent_color:v})} /></Field>
+                <Field label="واتساب"><TextInput value={tenantSettings.whatsapp_number || ""} onChange={(v)=>setTenantSettings({...tenantSettings,whatsapp_number:v})} /></Field>
+                <Field label="بريد الدعم"><TextInput value={tenantSettings.support_email || ""} onChange={(v)=>setTenantSettings({...tenantSettings,support_email:v})} /></Field>
+                <Field label="رابط الحجز العام"><TextInput value={`${window.location.origin}/${tenantSettings.slug || ""}`} disabled /></Field>
+                <div className="form-actions"><button><Save size={17}/> حفظ الهوية</button></div>
+              </form>
+            )}
+          </section>
+        )}
+
+        {activeView === "saas-tenants" && (
+          <section className="panel">
+            <div className="section-header">
+              <div>
+                <h2>إدارة شركات SaaS والتهيئة</h2>
+                <p className="muted">هذه الصفحة مخصصة للـ Super Admin لإنشاء شركة جديدة، إنشاء حساب مديرها، ضبط الباقة، ومتابعة حالة التهيئة.</p>
+              </div>
+              <button onClick={loadSaasTenants}><RefreshCw size={17} /> تحديث</button>
+            </div>
+            {adminUser?.role !== 'super_admin' ? (
+              <div className="empty-state">هذه الصفحة تتطلب حساب Super Admin. حسابات الشركات ترى بيانات شركتها فقط.</div>
+            ) : (
+              <>
+                <div className="kpi-grid">
+                  <div className="kpi-card"><span>إجمالي الشركات</span><strong>{tenants.length}</strong></div>
+                  <div className="kpi-card"><span>شركات نشطة</span><strong>{tenants.filter(t=>t.status==='active').length}</strong></div>
+                  <div className="kpi-card"><span>تحتاج تهيئة</span><strong>{tenants.filter(t=>t.onboarding_status==='pending_setup').length}</strong></div>
+                  <div className="kpi-card"><span>حسابات المدراء</span><strong>{tenants.reduce((sum,t)=>sum+(Number(t.admins_count)||0),0)}</strong></div>
+                </div>
+
+                <form className="form-grid compact-form" onSubmit={createTenant}>
+                  <Field label="اسم الشركة"><TextInput value={tenantForm.business_name} onChange={(v)=>setTenantForm({...tenantForm,business_name:v})} required /></Field>
+                  <Field label="الرابط المختصر slug"><TextInput value={tenantForm.slug} onChange={(v)=>setTenantForm({...tenantForm,slug:v})} required /></Field>
+                  <Field label="اسم مدير الشركة"><TextInput value={tenantForm.owner_name} onChange={(v)=>setTenantForm({...tenantForm,owner_name:v})} required /></Field>
+                  <Field label="بريد مدير الشركة"><TextInput value={tenantForm.owner_email} onChange={(v)=>setTenantForm({...tenantForm,owner_email:v})} required /></Field>
+                  <Field label="كلمة مرور المدير"><TextInput type="password" value={tenantForm.owner_password} onChange={(v)=>setTenantForm({...tenantForm,owner_password:v})} required /></Field>
+                  <Field label="جوال الشركة"><TextInput value={tenantForm.contact_phone} onChange={(v)=>setTenantForm({...tenantForm,contact_phone:v})} /></Field>
+                  <Field label="رابط الشعار"><TextInput value={tenantForm.logo_url} onChange={(v)=>setTenantForm({...tenantForm,logo_url:v})} /></Field>
+                  <Field label="رابط صورة الغلاف"><TextInput value={tenantForm.cover_image_url} onChange={(v)=>setTenantForm({...tenantForm,cover_image_url:v})} /></Field>
+                  <Field label="الشعار النصي"><TextInput value={tenantForm.tagline_ar} onChange={(v)=>setTenantForm({...tenantForm,tagline_ar:v})} /></Field>
+                  <Field label="لون رئيسي"><TextInput type="color" value={tenantForm.primary_color} onChange={(v)=>setTenantForm({...tenantForm,primary_color:v})} /></Field>
+                  <Field label="لون مساعد"><TextInput type="color" value={tenantForm.accent_color} onChange={(v)=>setTenantForm({...tenantForm,accent_color:v})} /></Field>
+                  <Field label="الباقة"><Select value={tenantForm.subscription_plan} onChange={(v)=>setTenantForm({...tenantForm,subscription_plan:v})}>{plans.map(p=><option key={p.code} value={p.code}>{p.name_ar} - {p.monthly_price || 0} ريال</option>)}</Select></Field>
+                  <Field label="حالة التهيئة"><Select value={tenantForm.onboarding_status} onChange={(v)=>setTenantForm({...tenantForm,onboarding_status:v})}><option value="pending_setup">قيد التهيئة</option><option value="ready">جاهزة</option><option value="needs_review">تحتاج مراجعة</option></Select></Field>
+                  <Field label="ملاحظات التهيئة"><TextArea value={tenantForm.onboarding_notes} onChange={(v)=>setTenantForm({...tenantForm,onboarding_notes:v})} /></Field>
+                  <div className="form-actions"><button><PlusCircle size={17}/> إنشاء الشركة وحساب مديرها</button></div>
+                </form>
+
+                <div className="table-wrap">
+                  <table>
+                    <thead><tr><th>الشركة</th><th>Slug</th><th>مدير الشركة</th><th>رابط الحجز</th><th>الباقة</th><th>التهيئة</th><th>الحجوزات</th><th>الخدمات</th><th>الحالة</th><th>إجراءات</th></tr></thead>
+                    <tbody>{tenants.map(t=><tr key={t.id}><td>{t.business_name}</td><td>{t.slug}</td><td>{t.owner_email || '-'}</td><td><code>/{t.slug}</code></td><td>{t.subscription_plan}</td><td>{t.onboarding_status || '-'}</td><td>{t.bookings_count}</td><td>{t.services_count}</td><td><span className={`status-badge ${t.status === 'active' ? 'active' : 'inactive'}`}>{t.status === 'active' ? 'نشطة' : 'موقوفة'}</span></td><td><button type="button" onClick={()=>loadTenantDetails(t.id)}>إدارة</button></td></tr>)}</tbody>
+                  </table>
+                </div>
+
+                {selectedTenant && (
+                  <div className="details-card">
+                    <div className="section-header">
+                      <div>
+                        <h3>إعدادات العميل: {selectedTenant.business_name}</h3>
+                        <p className="muted">يمكن للـ Super Admin ضبط بيانات العميل الأساسية أو إنشاء حساب مدير جديد للشركة.</p>
+                      </div>
+                      <button type="button" onClick={()=>setSelectedTenant(null)}><X size={16}/> إغلاق</button>
+                    </div>
+                    <form className="form-grid compact-form" onSubmit={saveSelectedTenant}>
+                      <Field label="اسم الشركة"><TextInput value={selectedTenant.business_name || ""} onChange={(v)=>setSelectedTenant({...selectedTenant,business_name:v})} /></Field>
+                      <Field label="Slug"><TextInput value={selectedTenant.slug || ""} disabled /></Field>
+                      <Field label="رابط الشعار"><TextInput value={selectedTenant.logo_url || ""} onChange={(v)=>setSelectedTenant({...selectedTenant,logo_url:v})} /></Field>
+                      <Field label="رابط الغلاف"><TextInput value={selectedTenant.cover_image_url || ""} onChange={(v)=>setSelectedTenant({...selectedTenant,cover_image_url:v})} /></Field>
+                      <Field label="الشعار النصي"><TextInput value={selectedTenant.tagline_ar || ""} onChange={(v)=>setSelectedTenant({...selectedTenant,tagline_ar:v})} /></Field>
+                      <Field label="وصف الشركة"><TextArea value={selectedTenant.description_ar || ""} onChange={(v)=>setSelectedTenant({...selectedTenant,description_ar:v})} /></Field>
+                      <Field label="واتساب"><TextInput value={selectedTenant.whatsapp_number || ""} onChange={(v)=>setSelectedTenant({...selectedTenant,whatsapp_number:v})} /></Field>
+                      <Field label="بريد الدعم"><TextInput value={selectedTenant.support_email || ""} onChange={(v)=>setSelectedTenant({...selectedTenant,support_email:v})} /></Field>
+                      <Field label="الباقة"><Select value={selectedTenant.subscription_plan || "starter"} onChange={(v)=>setSelectedTenant({...selectedTenant,subscription_plan:v})}>{plans.map(p=><option key={p.code} value={p.code}>{p.name_ar}</option>)}</Select></Field>
+                      <Field label="حالة الاشتراك"><Select value={selectedTenant.subscription_status || "active"} onChange={(v)=>setSelectedTenant({...selectedTenant,subscription_status:v})}><option value="active">نشط</option><option value="trial">تجريبي</option><option value="expired">منتهي</option><option value="suspended">موقوف</option></Select></Field>
+                      <Field label="حالة الشركة"><Select value={selectedTenant.status || "active"} onChange={(v)=>setSelectedTenant({...selectedTenant,status:v})}><option value="active">نشطة</option><option value="inactive">غير نشطة</option><option value="suspended">موقوفة</option></Select></Field>
+                      <Field label="حالة التهيئة"><Select value={selectedTenant.onboarding_status || "pending_setup"} onChange={(v)=>setSelectedTenant({...selectedTenant,onboarding_status:v})}><option value="pending_setup">قيد التهيئة</option><option value="ready">جاهزة</option><option value="needs_review">تحتاج مراجعة</option></Select></Field>
+                      <Field label="ملاحظات التهيئة"><TextArea value={selectedTenant.onboarding_notes || ""} onChange={(v)=>setSelectedTenant({...selectedTenant,onboarding_notes:v})} /></Field>
+                      <Field label="رابط الحجز"><TextInput value={`${window.location.origin}/${selectedTenant.slug || ""}`} disabled /></Field>
+                      <div className="form-actions"><button><Save size={17}/> حفظ إعدادات العميل</button></div>
+                    </form>
+
+                    <h3>حسابات مدراء الشركة</h3>
+                    <div className="table-wrap compact-table">
+                      <table>
+                        <thead><tr><th>الاسم</th><th>البريد</th><th>الدور</th><th>الحالة</th><th>آخر دخول</th></tr></thead>
+                        <tbody>{(selectedTenant.admins || []).map(u=><tr key={u.id}><td>{u.name}</td><td>{u.email}</td><td>{u.role}</td><td>{u.status}</td><td>{formatDate(u.last_login_at)}</td></tr>)}</tbody>
+                      </table>
+                    </div>
+                    <form className="form-grid compact-form" onSubmit={saveTenantAdmin}>
+                      <Field label="اسم المدير"><TextInput value={tenantAdminForm.name} onChange={(v)=>setTenantAdminForm({...tenantAdminForm,name:v})} required /></Field>
+                      <Field label="بريد المدير"><TextInput value={tenantAdminForm.email} onChange={(v)=>setTenantAdminForm({...tenantAdminForm,email:v})} required /></Field>
+                      <Field label="كلمة المرور"><TextInput type="password" value={tenantAdminForm.password} onChange={(v)=>setTenantAdminForm({...tenantAdminForm,password:v})} required /></Field>
+                      <Field label="الدور"><Select value={tenantAdminForm.role} onChange={(v)=>setTenantAdminForm({...tenantAdminForm,role:v})}><option value="tenant_owner">مالك الشركة</option><option value="admin">مدير</option><option value="booking_manager">مسؤول حجوزات</option></Select></Field>
+                      <div className="form-actions"><button><PlusCircle size={17}/> حفظ حساب المدير</button></div>
+                    </form>
+                  </div>
+                )}
+
+                <div className="details-card">
+                  <h3>آخر عمليات Super Admin</h3>
+                  <div className="table-wrap compact-table">
+                    <table>
+                      <thead><tr><th>التاريخ</th><th>الشركة</th><th>المستخدم</th><th>العملية</th><th>الكيان</th></tr></thead>
+                      <tbody>{auditLogs.slice(0,20).map(l=><tr key={l.id}><td>{formatDate(l.created_at)}</td><td>{l.tenant_name || '-'}</td><td>{l.actor_email || '-'}</td><td>{l.action}</td><td>{l.entity_type}</td></tr>)}</tbody>
+                    </table>
+                  </div>
+                </div>
+              </>
+            )}
+          </section>
         )}
 
         {activeView === "booking-create" && (
@@ -1568,10 +1897,15 @@ function App() {
                 </Select>
               </Field>
               <Field label="نوع المناسبة">
-                <TextInput
+                <Select
                   value={bookingForm.event_type}
                   onChange={(v) => setBooking("event_type", v)}
-                />
+                >
+                  <option value="">اختيار نوع المناسبة</option>
+                  {(catalog.occasion_types || []).map((o) => (
+                    <option key={o.id} value={o.name_ar || o.name_en || o.id}>{o.name_ar || o.name_en}</option>
+                  ))}
+                </Select>
               </Field>
               <Field label="التاريخ">
                 <TextInput
@@ -2734,14 +3068,14 @@ function AnalyticsPanel({ bookings, beauticians, portfolio, reviews, catalog, da
         <AnalyticsStatCard
           title="إجمالي الإيرادات"
           value={currency(analytics.revenue || dashboard?.total_revenue || 0)}
-          sub="Quick Stats"
+          sub="إحصائيات سريعة"
           icon={CreditCard}
         />
         <AnalyticsStatCard title="حجوزات جديدة" value={analytics.newBookings} icon={CalendarDays} />
         <AnalyticsStatCard title="المتخصصون النشطون" value={analytics.activeBeauticians} icon={UserRound} />
         <AnalyticsStatCard title="عملاء جدد" value={analytics.customers} icon={UserRound} />
-        <AnalyticsStatCard title="نسبة الإنجاز" value={`${analytics.completionRate}%`} sub="Completed" icon={TrendingUp} />
-        <AnalyticsStatCard title="طلبات غير مدفوعة" value={analytics.unpaid} sub="Pending collection" icon={Bell} />
+        <AnalyticsStatCard title="نسبة الإنجاز" value={`${analytics.completionRate}%`} sub="مكتمل" icon={TrendingUp} />
+        <AnalyticsStatCard title="طلبات غير مدفوعة" value={analytics.unpaid} sub="بانتظار التحصيل" icon={Bell} />
       </div>
 
       <div className="analytics-grid-main">
@@ -3445,6 +3779,74 @@ function CatalogPanel({ catalog, api, load, setMessage }) {
               setEdit({ districts: x.id });
             }}
             onDel={(x) => del("districts", x.id, "الحي")}
+          />
+        </div>
+      </div>
+    </section>
+  );
+}
+
+
+const emptyOccasionType = { name_ar: "", name_en: "", description: "", status: "active", sort_order: 0 };
+function OccasionTypesPanel({ catalog, api, refreshServiceCatalog, setMessage }) {
+  const occasionTypes = Array.isArray(catalog?.occasion_types) ? catalog.occasion_types : [];
+  const [form, setForm] = useState(emptyOccasionType);
+  const [editId, setEditId] = useState(null);
+  async function saveOccasion() {
+    try {
+      await api(`/admin/occasion-types${editId ? `/${editId}` : ""}`, {
+        method: editId ? "PATCH" : "POST",
+        body: JSON.stringify(clean(form)),
+      });
+      await refreshServiceCatalog();
+      setForm(emptyOccasionType);
+      setEditId(null);
+      setMessage("تم حفظ نوع المناسبة وتحديث قوائم الحجز.");
+    } catch (e) {
+      setMessage(`تعذر حفظ نوع المناسبة: ${e.message}`);
+    }
+  }
+  async function deleteOccasion(item) {
+    if (!confirm(`حذف نوع المناسبة: ${item.name_ar || item.name_en}؟`)) return;
+    try {
+      await api(`/admin/occasion-types/${item.id}`, { method: "DELETE" });
+      await refreshServiceCatalog();
+      setMessage("تم حذف نوع المناسبة من القائمة.");
+    } catch (e) {
+      setMessage(`تعذر حذف نوع المناسبة: ${e.message}`);
+    }
+  }
+  return (
+    <section className="panel">
+      <div className="section-header">
+        <div>
+          <h2>إدارة أنواع المناسبات</h2>
+          <p className="muted">هذه القائمة تظهر كقائمة منسدلة في طلب الحجز للعميلة ولوحة التحكم. أضف المطلوبات مثل زواج، خطوبة، تخرج، عيد أو مناسبة خاصة.</p>
+        </div>
+        <button onClick={refreshServiceCatalog}><RefreshCw size={17}/> تحديث</button>
+      </div>
+      <div className="two">
+        <div>
+          <h3>{editId ? "تعديل نوع مناسبة" : "إضافة نوع مناسبة"}</h3>
+          <Field label="اسم المناسبة عربي"><TextInput value={form.name_ar} onChange={(v)=>setForm({...form,name_ar:v})} placeholder="مثال: زواج" /></Field>
+          <Field label="اسم المناسبة إنجليزي"><TextInput value={form.name_en} onChange={(v)=>setForm({...form,name_en:v})} placeholder="Wedding" /></Field>
+          <Field label="وصف مختصر"><TextInput value={form.description} onChange={(v)=>setForm({...form,description:v})} placeholder="وصف داخلي اختياري" /></Field>
+          <div className="grid3">
+            <Field label="الترتيب"><TextInput type="number" value={form.sort_order} onChange={(v)=>setForm({...form,sort_order:v})} /></Field>
+            <Field label="الحالة"><Select value={form.status} onChange={(v)=>setForm({...form,status:v})}><option value="active">نشط</option><option value="inactive">غير نشط</option></Select></Field>
+          </div>
+          <div className="form-actions">
+            <button type="button" onClick={saveOccasion}><Save size={17}/> {editId ? "حفظ التعديل" : "إضافة نوع المناسبة"}</button>
+            {editId && <button type="button" className="secondary" onClick={()=>{setForm(emptyOccasionType);setEditId(null);}}>إلغاء التعديل</button>}
+          </div>
+        </div>
+        <div>
+          <h3>القائمة الحالية</h3>
+          <List
+            items={occasionTypes}
+            sub="description"
+            onEdit={(x)=>{setForm({ ...emptyOccasionType, ...x }); setEditId(x.id);}}
+            onDel={deleteOccasion}
           />
         </div>
       </div>
