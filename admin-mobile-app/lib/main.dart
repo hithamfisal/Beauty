@@ -16,20 +16,24 @@ const savedAdminEmailKey = 'bhs_admin_mobile_email';
 const savedAdminNameKey = 'bhs_admin_mobile_name';
 
 class BhsColors {
-  static const roseGold = Color(0xFFD4A08A);
-  static const roseGoldDeep = Color(0xFFB77D69);
-  static const ivory = Color(0xFFFFF8F4);
-  static const porcelain = Color(0xFFFFFCFA);
-  static const softPink = Color(0xFFF7DDE1);
-  static const creamGold = Color(0xFFF4E6D2);
-  static const charcoal = Color(0xFF292929);
-  static const plum = Color(0xFF563D45);
-  static const mocha = Color(0xFFA78678);
-  static const mochaDark = Color(0xFF7E5F54);
-  static const success = Color(0xFF68A97A);
-  static const warning = Color(0xFFE3A047);
-  static const danger = Color(0xFFE07A5F);
-  static const info = Color(0xFF6F8FB8);
+  static const midnight = Color(0xFF080B18);
+  static const midnightSoft = Color(0xFF14182D);
+  static const roseGold = Color(0xFFEC4899);
+  static const roseGoldDeep = Color(0xFF8B5CF6);
+  static const electricBlue = Color(0xFF3B82F6);
+  static const cyanAccent = Color(0xFF22D3EE);
+  static const ivory = Color(0xFF080B18);
+  static const porcelain = Color(0xFF0E1224);
+  static const softPink = Color(0xFF1B2038);
+  static const creamGold = Color(0xFF3B82F6);
+  static const charcoal = Color(0xFFF8FAFC);
+  static const plum = Color(0xFF080B18);
+  static const mocha = Color(0xFFA8B0C5);
+  static const mochaDark = Color(0xFFE2E8F0);
+  static const success = Color(0xFF22C55E);
+  static const warning = Color(0xFFF59E0B);
+  static const danger = Color(0xFFEF4444);
+  static const info = Color(0xFF22D3EE);
 }
 
 void main() => runApp(const BeautyAdminMobileApp());
@@ -40,12 +44,13 @@ class BeautyAdminMobileApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = ColorScheme.fromSeed(
-      seedColor: BhsColors.roseGoldDeep,
-      brightness: Brightness.light,
-      primary: BhsColors.roseGoldDeep,
-      secondary: BhsColors.creamGold,
+      seedColor: BhsColors.roseGold,
+      brightness: Brightness.dark,
+      primary: BhsColors.roseGold,
+      secondary: BhsColors.roseGoldDeep,
+      tertiary: BhsColors.electricBlue,
       background: BhsColors.ivory,
-      surface: Colors.white,
+      surface: BhsColors.midnightSoft,
     );
     return MaterialApp(
       debugShowCheckedModeBanner: false,
@@ -55,7 +60,7 @@ class BeautyAdminMobileApp extends StatelessWidget {
         colorScheme: scheme,
         scaffoldBackgroundColor: BhsColors.porcelain,
         useMaterial3: true,
-        brightness: Brightness.light,
+        brightness: Brightness.dark,
         fontFamilyFallback: const ['Cairo', 'Tajawal', 'Almarai', 'Arial'],
         visualDensity: VisualDensity.adaptivePlatformDensity,
         pageTransitionsTheme: const PageTransitionsTheme(builders: {
@@ -103,7 +108,7 @@ class BeautyAdminMobileApp extends StatelessWidget {
               RoundedRectangleBorder(borderRadius: BorderRadius.circular(26)),
         ),
         bottomNavigationBarTheme: const BottomNavigationBarThemeData(
-          backgroundColor: Colors.white,
+          backgroundColor: BhsColors.midnightSoft,
           selectedItemColor: BhsColors.roseGoldDeep,
           unselectedItemColor: BhsColors.mocha,
           type: BottomNavigationBarType.fixed,
@@ -113,7 +118,7 @@ class BeautyAdminMobileApp extends StatelessWidget {
         navigationBarTheme: NavigationBarThemeData(
           height: 74,
           elevation: 0,
-          backgroundColor: Colors.white,
+          backgroundColor: BhsColors.midnightSoft,
           indicatorColor: BhsColors.softPink,
           indicatorShape:
               RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
@@ -134,7 +139,7 @@ class BeautyAdminMobileApp extends StatelessWidget {
         ),
         inputDecorationTheme: InputDecorationTheme(
           filled: true,
-          fillColor: Colors.white.withOpacity(.96),
+          fillColor: BhsColors.midnightSoft.withOpacity(.96),
           contentPadding:
               const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
           border: OutlineInputBorder(
@@ -355,23 +360,19 @@ class LuxuryCard extends StatelessWidget {
         decoration: BoxDecoration(
           gradient: LinearGradient(
             colors: [
-              Colors.white.withOpacity(.98),
-              const Color(0xFFFFF7F3).withOpacity(.94)
+              BhsColors.midnightSoft.withOpacity(.98),
+              BhsColors.porcelain.withOpacity(.94)
             ],
             begin: Alignment.topRight,
             end: Alignment.bottomLeft,
           ),
           borderRadius: BorderRadius.circular(26),
-          border: Border.all(color: BhsColors.roseGold.withOpacity(.30)),
+          border: Border.all(color: Colors.white.withOpacity(.10)),
           boxShadow: [
             BoxShadow(
-                color: BhsColors.mocha.withOpacity(.10),
-                blurRadius: 24,
-                offset: const Offset(0, 12)),
-            BoxShadow(
-                color: Colors.white.withOpacity(.72),
-                blurRadius: 0,
-                spreadRadius: 1),
+                color: Colors.black.withOpacity(.28),
+                blurRadius: 28,
+                offset: const Offset(0, 16)),
           ],
         ),
         child: child,
@@ -852,15 +853,15 @@ class KpiCard extends StatelessWidget {
         padding: const EdgeInsets.all(14),
         clipBehavior: Clip.antiAlias,
         decoration: BoxDecoration(
-          gradient: LinearGradient(
-              colors: [Colors.white, BhsColors.softPink.withOpacity(.30)],
-              begin: Alignment.topRight,
-              end: Alignment.bottomLeft),
+          gradient: LinearGradient(colors: [
+            BhsColors.midnightSoft.withOpacity(.98),
+            BhsColors.softPink.withOpacity(.72)
+          ], begin: Alignment.topRight, end: Alignment.bottomLeft),
           borderRadius: BorderRadius.circular(24),
-          border: Border.all(color: BhsColors.roseGold.withOpacity(.28)),
+          border: Border.all(color: Colors.white.withOpacity(.10)),
           boxShadow: [
             BoxShadow(
-                color: BhsColors.mocha.withOpacity(.08),
+                color: Colors.black.withOpacity(.22),
                 blurRadius: 18,
                 offset: const Offset(0, 9))
           ],

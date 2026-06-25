@@ -19,19 +19,24 @@ const savedAdminTokenKey = 'admin_token';
 const savedAdminEmailKey = 'admin_email';
 
 class BhsColors {
-  static const roseGold = Color(0xFFD4A08A);
-  static const roseGoldDeep = Color(0xFFB77D69);
-  static const ivory = Color(0xFFFFF8F4);
-  static const porcelain = Color(0xFFFFFCFA);
-  static const softPink = Color(0xFFF7DDE1);
-  static const creamGold = Color(0xFFF4E6D2);
-  static const charcoal = Color(0xFF292929);
-  static const plum = Color(0xFF563D45);
-  static const mocha = Color(0xFFA78678);
-  static const mochaDark = Color(0xFF7E5F54);
-  static const success = Color(0xFF8BCB97);
-  static const info = Color(0xFF6F8FB8);
-  static const danger = Color(0xFFE07A5F);
+  static const midnight = Color(0xFF080B18);
+  static const midnightSoft = Color(0xFF14182D);
+  static const roseGold = Color(0xFFEC4899);
+  static const roseGoldDeep = Color(0xFF8B5CF6);
+  static const electricBlue = Color(0xFF3B82F6);
+  static const cyanAccent = Color(0xFF22D3EE);
+  static const ivory = Color(0xFFFFF7FC);
+  static const porcelain = Color(0xFFF7F5FF);
+  static const softPink = Color(0xFFFCE7F3);
+  static const creamGold = Color(0xFFE0F2FE);
+  static const charcoal = Color(0xFF111827);
+  static const plum = Color(0xFF0E1224);
+  static const mocha = Color(0xFF64748B);
+  static const mochaDark = Color(0xFF334155);
+  static const success = Color(0xFF22C55E);
+  static const warning = Color(0xFFF59E0B);
+  static const info = Color(0xFF3B82F6);
+  static const danger = Color(0xFFEF4444);
 }
 
 String normalizePhone(String value) {
@@ -96,10 +101,11 @@ class BeautyHomeServiceApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = ColorScheme.fromSeed(
-      seedColor: BhsColors.roseGoldDeep,
+      seedColor: BhsColors.roseGold,
       brightness: Brightness.light,
-      primary: BhsColors.roseGoldDeep,
-      secondary: BhsColors.creamGold,
+      primary: BhsColors.roseGold,
+      secondary: BhsColors.roseGoldDeep,
+      tertiary: BhsColors.electricBlue,
       background: BhsColors.ivory,
       surface: Colors.white,
     );
@@ -373,18 +379,18 @@ class LuxuryCard extends StatelessWidget {
           gradient: LinearGradient(
             colors: [
               Colors.white.withOpacity(.98),
-              const Color(0xFFFFF7F3).withOpacity(.94)
+              BhsColors.porcelain.withOpacity(.94)
             ],
             begin: Alignment.topRight,
             end: Alignment.bottomLeft,
           ),
           borderRadius: BorderRadius.circular(26),
-          border: Border.all(color: BhsColors.roseGold.withOpacity(.30)),
+          border: Border.all(color: BhsColors.roseGoldDeep.withOpacity(.18)),
           boxShadow: [
             BoxShadow(
-                color: BhsColors.mocha.withOpacity(.10),
-                blurRadius: 24,
-                offset: const Offset(0, 12)),
+                color: BhsColors.electricBlue.withOpacity(.08),
+                blurRadius: 26,
+                offset: const Offset(0, 14)),
             BoxShadow(
                 color: Colors.white.withOpacity(.72),
                 blurRadius: 0,
@@ -411,7 +417,7 @@ class SectionTitle extends StatelessWidget {
             decoration: BoxDecoration(
               borderRadius: BorderRadius.circular(999),
               gradient: const LinearGradient(
-                  colors: [BhsColors.roseGoldDeep, BhsColors.softPink],
+                  colors: [BhsColors.roseGold, BhsColors.electricBlue],
                   begin: Alignment.topCenter,
                   end: Alignment.bottomCenter),
             ),
@@ -677,20 +683,17 @@ class _HomeScreenState extends State<HomeScreen> {
         clipBehavior: Clip.antiAlias,
         decoration: BoxDecoration(
           borderRadius: BorderRadius.circular(34),
-          gradient: const LinearGradient(
-              colors: [Colors.white, BhsColors.softPink, Color(0xFFFFF0E8)],
-              begin: Alignment.topRight,
-              end: Alignment.bottomLeft),
-          border: Border.all(color: Colors.white),
+          gradient: const LinearGradient(colors: [
+            BhsColors.midnight,
+            BhsColors.roseGoldDeep,
+            BhsColors.electricBlue
+          ], begin: Alignment.topRight, end: Alignment.bottomLeft),
+          border: Border.all(color: Colors.white24),
           boxShadow: [
             BoxShadow(
-                color: BhsColors.roseGoldDeep.withOpacity(.18),
-                blurRadius: 34,
+                color: BhsColors.roseGoldDeep.withOpacity(.28),
+                blurRadius: 38,
                 offset: const Offset(0, 16)),
-            BoxShadow(
-                color: Colors.white.withOpacity(.82),
-                blurRadius: 0,
-                spreadRadius: 1),
           ],
         ),
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -713,18 +716,18 @@ class _HomeScreenState extends State<HomeScreen> {
                       style: const TextStyle(
                           fontSize: 24,
                           fontWeight: FontWeight.w900,
-                          color: BhsColors.charcoal)),
+                          color: Colors.white)),
                   const Text('جمالكِ يبدأ من منزلكِ',
                       style: TextStyle(
-                          color: BhsColors.mochaDark,
+                          color: Color(0xFFDDE7FF),
                           fontWeight: FontWeight.w700)),
                 ])),
           ]),
           const SizedBox(height: 18),
           const Text(
               'احجزي خدمة تجميل منزلية بخطوات بسيطة، وسيقوم فريقنا بتأكيد الموعد والموقع معكِ.',
-              style: TextStyle(
-                  fontSize: 15, height: 1.55, color: BhsColors.charcoal)),
+              style:
+                  TextStyle(fontSize: 15, height: 1.55, color: Colors.white)),
           const SizedBox(height: 18),
           Row(children: [
             Expanded(
