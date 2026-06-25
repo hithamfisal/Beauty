@@ -12,7 +12,9 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-dotenv.config();
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+dotenv.config({ path: path.resolve(__dirname, '../.env') });
 
 const app = express();
 const PORT = process.env.PORT || 4000;
@@ -25,11 +27,19 @@ const DEFAULT_ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'Beauty@12345';
 const DEFAULT_TENANT_SLUG = process.env.DEFAULT_TENANT_SLUG || 'beauty-home-service';
 const SUPER_ADMIN_EMAIL = String(process.env.SUPER_ADMIN_EMAIL || '').trim().toLowerCase();
 const SUPER_ADMIN_PASSWORD = String(process.env.SUPER_ADMIN_PASSWORD || '').trim();
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
 const BACKUP_DIR = process.env.BACKUP_DIR || path.resolve(__dirname, '..', 'backups');
+const OTP_DELIVERY_CHANNEL = String(process.env.OTP_DELIVERY_CHANNEL || 'auto').trim().toLowerCase();
+const WHATSAPP_API_VERSION = process.env.WHATSAPP_API_VERSION || 'v20.0';
+const WHATSAPP_ACCESS_TOKEN = String(process.env.WHATSAPP_ACCESS_TOKEN || '').trim();
+const WHATSAPP_PHONE_NUMBER_ID = String(process.env.WHATSAPP_PHONE_NUMBER_ID || '').trim();
+const WHATSAPP_OTP_TEMPLATE_NAME = String(process.env.WHATSAPP_OTP_TEMPLATE_NAME || '').trim();
+const WHATSAPP_TEMPLATE_LANGUAGE = String(process.env.WHATSAPP_TEMPLATE_LANGUAGE || 'ar').trim();
+const ADMIN_LOGIN_WINDOW_MINUTES = Number(process.env.ADMIN_LOGIN_WINDOW_MINUTES || 15);
+const ADMIN_LOGIN_MAX_FAILURES = Number(process.env.ADMIN_LOGIN_MAX_FAILURES || 5);
+const MAX_IMAGE_DATA_URL_BYTES = Number(process.env.MAX_IMAGE_DATA_URL_BYTES || 4 * 1024 * 1024);
 
 if (IS_PRODUCTION && JWT_SECRET.length < 32) throw new Error('JWT_SECRET must be configured with at least 32 characters in production.');
+if (IS_PRODUCTION && CUSTOMER_OTP_DEV_MODE) throw new Error('CUSTOMER_OTP_DEV_MODE must be disabled in production.');
 if (IS_PRODUCTION && (!process.env.ADMIN_EMAIL || !process.env.ADMIN_PASSWORD || process.env.ADMIN_PASSWORD.length < 12)) {
   throw new Error('ADMIN_EMAIL and a 12+ character ADMIN_PASSWORD are required in production.');
 }
@@ -45,6 +55,13 @@ app.use(cors({ origin(origin, callback) {
 } }));
 app.use(express.json({ limit: '20mb' }));
 
+const ROLE_PERMISSIONS = {
+  super_admin: ['*'],
+  tenant_owner: ['manage_bookings', 'manage_catalog', 'manage_beauticians', 'manage_payments', 'manage_tenant_settings', 'tenant_data_export', 'import_locations'],
+  admin: ['manage_bookings', 'manage_catalog', 'manage_beauticians', 'manage_payments', 'tenant_data_export'],
+  staff: ['manage_bookings']
+};
+
 function normalizeText(value) {
   return typeof value === 'string' ? value.trim() : value;
 }
@@ -58,350 +75,54 @@ function nullable(value) {
   return v === '' ? null : v;
 }
 
-async function columnExists(tableName, columnName) {
-  const result = await query(
-    `SELECT 1 FROM information_schema.columns WHERE table_name=$1 AND column_name=$2 LIMIT 1`,
-    [tableName, columnName]
-  );
-  return result.rows.length > 0;
-}
-
-async function ensureV14Schema() {
-  await query(`CREATE EXTENSION IF NOT EXISTS "uuid-ossp"`);
-
-  await query(`
-    CREATE TABLE IF NOT EXISTS regions (
-      id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-      external_id VARCHAR(80) UNIQUE,
-      name_ar VARCHAR(160) NOT NULL,
-      name_en VARCHAR(160),
-      status VARCHAR(20) NOT NULL DEFAULT 'active',
-      sort_order INT DEFAULT 0,
-      created_at TIMESTAMP DEFAULT NOW(),
-      updated_at TIMESTAMP DEFAULT NOW()
-    )
-  `);
-
-  await query(`
-    CREATE TABLE IF NOT EXISTS service_categories (
-      id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-      name_ar VARCHAR(160) NOT NULL,
-      name_en VARCHAR(160),
-      description TEXT,
-      status VARCHAR(20) NOT NULL DEFAULT 'active',
-      sort_order INT DEFAULT 0,
-      created_at TIMESTAMP DEFAULT NOW(),
-      updated_at TIMESTAMP DEFAULT NOW()
-    )
-  `);
-
-
-  await query(`
-    CREATE TABLE IF NOT EXISTS occasion_types (
-      id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-      name_ar VARCHAR(160) NOT NULL,
-      name_en VARCHAR(160),
-      description TEXT,
-      status VARCHAR(20) NOT NULL DEFAULT 'active',
-      sort_order INT DEFAULT 0,
-      tenant_id UUID REFERENCES tenants(id) ON DELETE CASCADE DEFAULT NULLIF(current_setting('app.current_tenant', true), '')::uuid,
-      created_at TIMESTAMP DEFAULT NOW(),
-      updated_at TIMESTAMP DEFAULT NOW()
-    )
-  `);
-  await query(`CREATE INDEX IF NOT EXISTS idx_occasion_types_status ON occasion_types(status, sort_order, name_ar)`);
-  await query(`CREATE INDEX IF NOT EXISTS idx_occasion_types_tenant_id ON occasion_types(tenant_id)`);
-
-  await query(`ALTER TABLE cities ADD COLUMN IF NOT EXISTS region_id UUID REFERENCES regions(id)`);
-  await query(`ALTER TABLE cities ADD COLUMN IF NOT EXISTS external_id VARCHAR(80)`);
-  await query(`ALTER TABLE cities ADD COLUMN IF NOT EXISTS sort_order INT DEFAULT 0`);
-  await query(`ALTER TABLE districts ADD COLUMN IF NOT EXISTS external_id VARCHAR(80)`);
-  await query(`ALTER TABLE districts ADD COLUMN IF NOT EXISTS sort_order INT DEFAULT 0`);
-  await query(`ALTER TABLE services ADD COLUMN IF NOT EXISTS category_id UUID REFERENCES service_categories(id)`);
-  await query(`ALTER TABLE services ADD COLUMN IF NOT EXISTS name_ar VARCHAR(160)`);
-  await query(`ALTER TABLE services ADD COLUMN IF NOT EXISTS name_en VARCHAR(160)`);
-  await query(`ALTER TABLE services ADD COLUMN IF NOT EXISTS base_price NUMERIC(10,2)`);
-  await query(`ALTER TABLE services ADD COLUMN IF NOT EXISTS duration_minutes INT`);
-  await query(`ALTER TABLE services ADD COLUMN IF NOT EXISTS sort_order INT DEFAULT 0`);
-  await query(`ALTER TABLE customers ADD COLUMN IF NOT EXISTS region_id UUID REFERENCES regions(id)`);
-  await query(`ALTER TABLE customers ADD COLUMN IF NOT EXISTS district_id UUID REFERENCES districts(id)`);
-  await query(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS region_id UUID REFERENCES regions(id)`);
-  await query(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS service_category_id UUID REFERENCES service_categories(id)`);
-  await query(`ALTER TABLE artists ADD COLUMN IF NOT EXISTS region_id UUID REFERENCES regions(id)`);
-  await query(`ALTER TABLE artists ADD COLUMN IF NOT EXISTS main_expertise_service_id UUID REFERENCES services(id)`);
-  await query(`ALTER TABLE artists ADD COLUMN IF NOT EXISTS main_expertise_category_id UUID REFERENCES service_categories(id)`);
-  await query(`UPDATE artists a SET main_expertise_category_id=s.category_id FROM services s WHERE a.main_expertise_service_id=s.id AND a.main_expertise_category_id IS NULL AND s.category_id IS NOT NULL`);
-
-  await query(`
-    CREATE TABLE IF NOT EXISTS beautician_services (
-      id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-      beautician_id UUID REFERENCES artists(id) ON DELETE CASCADE,
-      service_id UUID REFERENCES services(id) ON DELETE CASCADE,
-      experience_level VARCHAR(80),
-      is_primary BOOLEAN DEFAULT FALSE,
-      created_at TIMESTAMP DEFAULT NOW(),
-      updated_at TIMESTAMP DEFAULT NOW(),
-      UNIQUE(beautician_id, service_id)
-    )
-  `);
-
-  await query(`
-    CREATE TABLE IF NOT EXISTS artist_availability (
-      id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-      artist_id UUID REFERENCES artists(id) ON DELETE CASCADE,
-      available_date DATE NOT NULL,
-      from_time TIME,
-      to_time TIME,
-      is_available BOOLEAN DEFAULT TRUE,
-      note TEXT,
-      created_at TIMESTAMP DEFAULT NOW(),
-      updated_at TIMESTAMP DEFAULT NOW()
-    )
-  `);
-
-  await query(`
-    CREATE TABLE IF NOT EXISTS artist_reviews (
-      id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-      artist_id UUID REFERENCES artists(id) ON DELETE SET NULL,
-      booking_id UUID REFERENCES bookings(id) ON DELETE CASCADE,
-      punctuality INTEGER,
-      quality INTEGER,
-      customer_handling INTEGER,
-      overall_rating NUMERIC(3,1),
-      suitable_for_brides BOOLEAN DEFAULT FALSE,
-      suitable_for_groups BOOLEAN DEFAULT FALSE,
-      note TEXT,
-      created_at TIMESTAMP DEFAULT NOW(),
-      updated_at TIMESTAMP DEFAULT NOW()
-    )
-  `);
-
-
-  await query(`
-    CREATE TABLE IF NOT EXISTS admin_users (
-      id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-      name VARCHAR(160) NOT NULL DEFAULT 'Admin',
-      email VARCHAR(190) UNIQUE NOT NULL,
-      password_hash TEXT NOT NULL,
-      role VARCHAR(40) NOT NULL DEFAULT 'admin',
-      status VARCHAR(20) NOT NULL DEFAULT 'active',
-      created_at TIMESTAMP DEFAULT NOW(),
-      updated_at TIMESTAMP DEFAULT NOW()
-    )
-  `);
-
-  const adminCount = await query(`SELECT COUNT(*)::int AS count FROM admin_users`);
-  if (adminCount.rows[0].count === 0) {
-    const passwordHash = await bcrypt.hash(DEFAULT_ADMIN_PASSWORD, 10);
-    await query(
-      `INSERT INTO admin_users (name, email, password_hash, role, status) VALUES ($1,$2,$3,'admin','active')`,
-      ['System Admin', DEFAULT_ADMIN_EMAIL.toLowerCase(), passwordHash]
-    );
-    console.log(`Default admin created: ${DEFAULT_ADMIN_EMAIL}`);
-  }
-
-  await query(`CREATE INDEX IF NOT EXISTS idx_cities_region ON cities(region_id)`);
-  await query(`CREATE INDEX IF NOT EXISTS idx_districts_city ON districts(city_id)`);
-  await query(`CREATE INDEX IF NOT EXISTS idx_services_category ON services(category_id)`);
-  await query(`CREATE INDEX IF NOT EXISTS idx_bookings_region ON bookings(region_id)`);
-  await query(`CREATE INDEX IF NOT EXISTS idx_bookings_category ON bookings(service_category_id)`);
-
-  const hasName = await columnExists('services', 'name');
-  if (hasName) {
-    await query(`UPDATE services SET name_ar = COALESCE(name_ar, name), name_en = COALESCE(name_en, name) WHERE name_ar IS NULL OR name_en IS NULL`);
-  }
-
-  const existingCategories = await query(`SELECT COUNT(*)::int AS count FROM service_categories`);
-  if (existingCategories.rows[0].count === 0) {
-    const cats = [
-      ['الحناء', 'Henna', 'خدمات الحناء والنقوش'],
-      ['المكياج', 'Makeup', 'خدمات مكياج منزلية'],
-      ['الشعر', 'Hair', 'تصفيف وتسريحات الشعر'],
-      ['العناية', 'Care', 'العناية بالبشرة واليدين والقدمين']
-    ];
-    for (let i = 0; i < cats.length; i++) {
-      await query(`INSERT INTO service_categories (name_ar, name_en, description, sort_order) VALUES ($1,$2,$3,$4)`, [...cats[i], i + 1]);
-    }
-  }
-
-  const hennaCategory = await query(`SELECT id FROM service_categories WHERE name_ar='الحناء' LIMIT 1`);
-  if (hennaCategory.rows[0]) {
-    await query(`UPDATE services SET category_id = COALESCE(category_id, $1) WHERE category_id IS NULL`, [hennaCategory.rows[0].id]);
-  }
-
-  const serviceCount = await query(`SELECT COUNT(*)::int AS count FROM services`);
-  if (serviceCount.rows[0].count === 0) {
-    const categories = await query(`SELECT id, name_ar FROM service_categories`);
-    const idByName = Object.fromEntries(categories.rows.map(c => [c.name_ar, c.id]));
-    const services = [
-      [idByName['الحناء'], 'حناء بسيطة', 'Simple Henna', 100, 200, 60],
-      [idByName['الحناء'], 'حناء متوسطة', 'Medium Henna', 200, 400, 120],
-      [idByName['الحناء'], 'حناء فخمة', 'Luxury Henna', 400, 700, 180],
-      [idByName['الحناء'], 'حناء عروس', 'Bridal Henna', 700, 2000, 240],
-      [idByName['المكياج'], 'مكياج ناعم', 'Soft Makeup', 250, 500, 90],
-      [idByName['المكياج'], 'مكياج سهرة', 'Evening Makeup', 450, 900, 120],
-      [idByName['المكياج'], 'مكياج عروس', 'Bridal Makeup', 900, 2500, 180],
-      [idByName['الشعر'], 'استشوار', 'Blow Dry', 120, 250, 60],
-      [idByName['الشعر'], 'تسريحة بسيطة', 'Simple Hairstyle', 200, 450, 90],
-      [idByName['الشعر'], 'تسريحة عروس', 'Bridal Hairstyle', 600, 1600, 180],
-      [idByName['العناية'], 'تنظيف بشرة', 'Facial Cleansing', 250, 600, 90],
-      [idByName['العناية'], 'عناية يدين', 'Hand Care', 100, 250, 45],
-      [idByName['العناية'], 'عناية قدمين', 'Foot Care', 120, 300, 60]
-    ];
-    for (let i = 0; i < services.length; i++) {
-      await query(`
-        INSERT INTO services (category_id, name, name_ar, name_en, min_price, max_price, duration_minutes, status, sort_order)
-        VALUES ($1,$2,$3,$4,$5,$6,$7,'active',$8)
-      `, [services[i][0], services[i][1], services[i][1], services[i][2], services[i][3], services[i][4], services[i][5], i + 1]);
-    }
-  }
-
-  const regionCount = await query(`SELECT COUNT(*)::int AS count FROM regions`);
-  if (regionCount.rows[0].count === 0) {
-    const regions = [
-      ['1', 'الرياض', 'Riyadh'], ['2', 'مكة المكرمة', 'Makkah Al Mukarramah'], ['3', 'المدينة المنورة', 'Al Madinah Al Munawwarah'],
-      ['4', 'القصيم', 'Al Qassim'], ['5', 'المنطقة الشرقية', 'Eastern Province'], ['6', 'عسير', 'Aseer'], ['7', 'تبوك', 'Tabuk'],
-      ['8', 'حائل', 'Hail'], ['9', 'الحدود الشمالية', 'Northern Borders'], ['10', 'جازان', 'Jazan'], ['11', 'نجران', 'Najran'],
-      ['12', 'الباحة', 'Al Baha'], ['13', 'الجوف', 'Al Jouf']
-    ];
-    for (let i = 0; i < regions.length; i++) {
-      await query(`INSERT INTO regions (external_id, name_ar, name_en, sort_order) VALUES ($1,$2,$3,$4)`, [...regions[i], i + 1]);
-    }
-  }
-
-  const riyadh = await query(`SELECT id FROM regions WHERE name_ar='الرياض' LIMIT 1`);
-  if (riyadh.rows[0]) {
-    await query(`UPDATE cities SET region_id = COALESCE(region_id, $1) WHERE name_ar IN ('الرياض')`, [riyadh.rows[0].id]);
-  }
-
-  const eastern = await query(`SELECT id FROM regions WHERE name_ar='المنطقة الشرقية' LIMIT 1`);
-  if (eastern.rows[0]) {
-    await query(`UPDATE cities SET region_id = COALESCE(region_id, $1) WHERE name_ar IN ('الدمام','الخبر','الظهران')`, [eastern.rows[0].id]);
-  }
-
-  const makkah = await query(`SELECT id FROM regions WHERE name_ar='مكة المكرمة' LIMIT 1`);
-  if (makkah.rows[0]) {
-    await query(`UPDATE cities SET region_id = COALESCE(region_id, $1) WHERE name_ar IN ('جدة','مكة','مكة المكرمة')`, [makkah.rows[0].id]);
+function parsePermissions(value) {
+  if (Array.isArray(value)) return value.map(String);
+  if (!value) return [];
+  try {
+    const parsed = typeof value === 'string' ? JSON.parse(value) : value;
+    return Array.isArray(parsed) ? parsed.map(String) : [];
+  } catch {
+    return [];
   }
 }
 
-
-async function ensureV16Schema() {
-  await query(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS preferred_artist_id UUID REFERENCES artists(id)`);
-  await query(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS customer_review_rating INT`);
-  await query(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS customer_review_text TEXT`);
-
-  await query(`
-    CREATE TABLE IF NOT EXISTS beautician_portfolio (
-      id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-      beautician_id UUID REFERENCES artists(id) ON DELETE CASCADE,
-      service_category_id UUID REFERENCES service_categories(id) ON DELETE SET NULL,
-      service_id UUID REFERENCES services(id) ON DELETE SET NULL,
-      title_ar VARCHAR(180) NOT NULL,
-      title_en VARCHAR(180),
-      description TEXT,
-      image_url TEXT NOT NULL,
-      is_featured BOOLEAN DEFAULT FALSE,
-      status VARCHAR(20) NOT NULL DEFAULT 'published',
-      sort_order INT DEFAULT 0,
-      created_at TIMESTAMP DEFAULT NOW(),
-      updated_at TIMESTAMP DEFAULT NOW()
-    )
-  `);
-
-  await query(`
-    CREATE TABLE IF NOT EXISTS beautician_reviews (
-      id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-      booking_id UUID REFERENCES bookings(id) ON DELETE CASCADE,
-      beautician_id UUID REFERENCES artists(id) ON DELETE SET NULL,
-      customer_id UUID REFERENCES customers(id) ON DELETE SET NULL,
-      rating INT CHECK (rating BETWEEN 1 AND 5),
-      review_text TEXT,
-      status VARCHAR(20) NOT NULL DEFAULT 'published',
-      created_at TIMESTAMP DEFAULT NOW(),
-      updated_at TIMESTAMP DEFAULT NOW(),
-      UNIQUE(booking_id)
-    )
-  `);
-
-  await query(`CREATE INDEX IF NOT EXISTS idx_portfolio_beautician ON beautician_portfolio(beautician_id)`);
-  await query(`CREATE INDEX IF NOT EXISTS idx_portfolio_service ON beautician_portfolio(service_id)`);
-  await query(`CREATE INDEX IF NOT EXISTS idx_reviews_beautician ON beautician_reviews(beautician_id)`);
+function hasAdminPermission(admin, permission) {
+  if (!admin || !permission) return false;
+  if (admin.role === 'super_admin') return true;
+  const rolePermissions = ROLE_PERMISSIONS[admin.role] || [];
+  if (rolePermissions.includes('*') || rolePermissions.includes(permission)) return true;
+  return parsePermissions(admin.permissions).includes(permission);
 }
 
+function requirePermission(permission) {
+  return (req, res, next) => {
+    if (!hasAdminPermission(req.admin, permission)) return res.status(403).json({ error: 'You do not have permission for this operation' });
+    return next();
+  };
+}
 
-async function ensureV17V18Schema() {
-  await query(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS contact_preference VARCHAR(40)`);
-  await query(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS alternate_time VARCHAR(80)`);
-  await query(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS whatsapp_status VARCHAR(40) DEFAULT 'not_sent'`);
+function normalizeInternationalPhone(phone) {
+  const normalized = normalizePhone(phone);
+  if (!normalized) return '';
+  return normalized.startsWith('0') ? `966${normalized.slice(1)}` : normalized.replace(/^\+/, '');
+}
 
-  await query(`
-    CREATE TABLE IF NOT EXISTS booking_events (
-      id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-      booking_id UUID REFERENCES bookings(id) ON DELETE CASCADE,
-      event_type VARCHAR(80) NOT NULL DEFAULT 'note',
-      title VARCHAR(180),
-      description TEXT,
-      actor_type VARCHAR(40) DEFAULT 'system',
-      actor_name VARCHAR(160),
-      metadata JSONB,
-      created_at TIMESTAMP DEFAULT NOW()
-    )
-  `);
-  await query(`CREATE INDEX IF NOT EXISTS idx_booking_events_booking ON booking_events(booking_id)`);
+function getClientIp(req) {
+  return String(req.headers['x-forwarded-for'] || req.ip || req.socket?.remoteAddress || '')
+    .split(',')[0]
+    .trim()
+    .slice(0, 80);
+}
 
-  await query(`
-    CREATE TABLE IF NOT EXISTS communication_templates (
-      id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-      code VARCHAR(80) UNIQUE,
-      title_ar VARCHAR(180) NOT NULL,
-      body_ar TEXT NOT NULL,
-      channel VARCHAR(40) DEFAULT 'whatsapp',
-      status VARCHAR(20) DEFAULT 'active',
-      sort_order INT DEFAULT 0,
-      created_at TIMESTAMP DEFAULT NOW(),
-      updated_at TIMESTAMP DEFAULT NOW()
-    )
-  `);
-
-  const templateCount = await query(`SELECT COUNT(*)::int AS count FROM communication_templates`);
-  if (templateCount.rows[0].count === 0) {
-    const templates = [
-      ['new_request', 'رسالة طلب جديد', 'مرحباً {customer_name}، تم استلام طلبك في بيوتي هوم سيرفس وسيتم التواصل معك لتأكيد الموعد. رقم الطلب: {booking_id}', 1],
-      ['confirm_booking', 'تأكيد الحجز', 'مرحباً {customer_name}، تم تأكيد حجزك لخدمة {service_name} بتاريخ {booking_date} الساعة {booking_time}.', 2],
-      ['payment_reminder', 'تذكير الدفع', 'مرحباً {customer_name}، نذكرك بحالة الدفع لطلبك رقم {booking_id}. حالة الدفع الحالية: {payment_status}.', 3],
-      ['completed_review', 'طلب التقييم', 'مرحباً {customer_name}، سعدنا بخدمتك. يمكنك فتح التطبيق وتقييم خبيرة التجميل للطلب رقم {booking_id}.', 4]
-    ];
-    for (const t of templates) {
-      await query(`INSERT INTO communication_templates (code, title_ar, body_ar, sort_order) VALUES ($1,$2,$3,$4)`, t);
-    }
+function validateImageDataUrl(imageDataUrl) {
+  const match = String(imageDataUrl || '').match(/^data:image\/(png|jpe?g|webp);base64,([a-z0-9+/=\s]+)$/i);
+  if (!match) throw new ApiValidationError('Only PNG, JPEG, or WebP data URLs are accepted', { image_data_url: 'invalid_image_data_url' });
+  const base64 = match[2].replace(/\s+/g, '');
+  const approxBytes = Math.floor(base64.length * 0.75);
+  if (approxBytes > MAX_IMAGE_DATA_URL_BYTES) {
+    throw new ApiValidationError('Image is too large', { image_data_url: 'too_large', max_bytes: MAX_IMAGE_DATA_URL_BYTES });
   }
-}
-
-
-async function ensureV20Schema() {
-  await query(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS booking_number VARCHAR(40) UNIQUE`);
-  await query(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS booking_source VARCHAR(30) DEFAULT 'unknown'`);
-  await query(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS source_channel VARCHAR(30)`);
-  await query(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS last_status_change_at TIMESTAMP`);
-  await query(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS confirmed_at TIMESTAMP`);
-  await query(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS completed_at TIMESTAMP`);
-  await query(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS cancelled_at TIMESTAMP`);
-  await query(`CREATE SEQUENCE IF NOT EXISTS booking_number_seq START 1`);
-  await query(`CREATE INDEX IF NOT EXISTS idx_bookings_number ON bookings(booking_number)`);
-  await query(`CREATE INDEX IF NOT EXISTS idx_bookings_source ON bookings(booking_source)`);
-  await query(`
-    WITH ordered AS (
-      SELECT id, ROW_NUMBER() OVER (ORDER BY created_at, id) AS rn
-      FROM bookings
-      WHERE booking_number IS NULL
-    )
-    UPDATE bookings b
-    SET booking_number = 'BHS-' || EXTRACT(YEAR FROM COALESCE(b.created_at, NOW()))::int || '-' || LPAD(ordered.rn::text, 6, '0'),
-        booking_source = COALESCE(booking_source, 'legacy')
-    FROM ordered
-    WHERE b.id = ordered.id
-  `);
+  return { mime: `image/${match[1].toLowerCase().replace('jpg', 'jpeg')}`, bytes: approxBytes };
 }
 
 async function generateBookingNumber() {
@@ -411,29 +132,6 @@ async function generateBookingNumber() {
   return `BHS-${year}-${seq}`;
 }
 
-
-async function ensureV21PaymentSchema() {
-  await query(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS payment_method VARCHAR(40)`);
-  await query(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS payment_reference VARCHAR(120)`);
-  await query(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS payment_proof_url TEXT`);
-  await query(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS payment_notes TEXT`);
-  await query(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS paid_at TIMESTAMP`);
-  await query(`
-    CREATE TABLE IF NOT EXISTS payment_records (
-      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-      booking_id UUID REFERENCES bookings(id) ON DELETE CASCADE,
-      payment_status VARCHAR(40),
-      payment_method VARCHAR(40),
-      amount NUMERIC(12,2),
-      reference_no VARCHAR(120),
-      proof_url TEXT,
-      note TEXT,
-      created_by VARCHAR(120),
-      created_at TIMESTAMP DEFAULT NOW()
-    )
-  `);
-  await query(`CREATE INDEX IF NOT EXISTS idx_payment_records_booking ON payment_records(booking_id)`);
-}
 
 const BOOKING_STATUS_LABELS = {
   new: 'جديد',
@@ -494,9 +192,13 @@ function fillTemplate(templateText, booking) {
 }
 
 async function uploadToCloudinary(imageDataUrl, folder = 'beauty-home-service') {
+  validateImageDataUrl(imageDataUrl);
   const cloudName = process.env.CLOUDINARY_CLOUD_NAME;
   const uploadPreset = process.env.CLOUDINARY_UPLOAD_PRESET;
-  if (!cloudName || !uploadPreset) return { url: imageDataUrl, provider: 'inline-data-url' };
+  if (!cloudName || !uploadPreset) {
+    if (IS_PRODUCTION) throw new Error('Cloudinary upload provider is not configured');
+    return { url: imageDataUrl, provider: 'inline-data-url' };
+  }
   const form = new FormData();
   form.append('file', imageDataUrl);
   form.append('upload_preset', uploadPreset);
@@ -510,59 +212,6 @@ async function uploadToCloudinary(imageDataUrl, folder = 'beauty-home-service') 
 }
 
 
-
-async function ensureV22V23Schema() {
-  await query(`ALTER TABLE artists ADD COLUMN IF NOT EXISTS availability_status VARCHAR(30) DEFAULT 'available'`);
-  await query(`ALTER TABLE artists ADD COLUMN IF NOT EXISTS working_days JSONB DEFAULT '[0,1,2,3,4,5]'::jsonb`);
-  await query(`ALTER TABLE artists ADD COLUMN IF NOT EXISTS work_start_time TIME DEFAULT '10:00'`);
-  await query(`ALTER TABLE artists ADD COLUMN IF NOT EXISTS work_end_time TIME DEFAULT '22:00'`);
-  await query(`ALTER TABLE artists ADD COLUMN IF NOT EXISTS max_daily_bookings INT DEFAULT 3`);
-  await query(`ALTER TABLE artists ADD COLUMN IF NOT EXISTS coverage_region_ids JSONB DEFAULT '[]'::jsonb`);
-  await query(`ALTER TABLE artists ADD COLUMN IF NOT EXISTS coverage_city_ids JSONB DEFAULT '[]'::jsonb`);
-  await query(`ALTER TABLE artists ADD COLUMN IF NOT EXISTS coverage_district_ids JSONB DEFAULT '[]'::jsonb`);
-  await query(`CREATE INDEX IF NOT EXISTS idx_artists_availability_status ON artists(availability_status)`);
-
-  await query(`
-    CREATE TABLE IF NOT EXISTS customer_otp_codes (
-      id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-      customer_id UUID REFERENCES customers(id) ON DELETE CASCADE,
-      phone VARCHAR(40) NOT NULL,
-      otp_code VARCHAR(10) NOT NULL,
-      purpose VARCHAR(40) DEFAULT 'login',
-      expires_at TIMESTAMP NOT NULL,
-      used_at TIMESTAMP,
-      created_at TIMESTAMP DEFAULT NOW()
-    )
-  `);
-  await query(`CREATE INDEX IF NOT EXISTS idx_customer_otp_phone ON customer_otp_codes(phone, expires_at)`);
-
-  await query(`
-    CREATE TABLE IF NOT EXISTS customer_addresses (
-      id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-      customer_id UUID REFERENCES customers(id) ON DELETE CASCADE,
-      region_id UUID REFERENCES regions(id),
-      city_id UUID REFERENCES cities(id),
-      district_id UUID REFERENCES districts(id),
-      label VARCHAR(120),
-      address TEXT NOT NULL,
-      is_default BOOLEAN DEFAULT FALSE,
-      created_at TIMESTAMP DEFAULT NOW(),
-      updated_at TIMESTAMP DEFAULT NOW()
-    )
-  `);
-  await query(`CREATE INDEX IF NOT EXISTS idx_customer_addresses_customer ON customer_addresses(customer_id)`);
-
-  await query(`
-    CREATE TABLE IF NOT EXISTS customer_favorite_beauticians (
-      id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-      customer_id UUID REFERENCES customers(id) ON DELETE CASCADE,
-      beautician_id UUID REFERENCES artists(id) ON DELETE CASCADE,
-      created_at TIMESTAMP DEFAULT NOW(),
-      UNIQUE(customer_id, beautician_id)
-    )
-  `);
-  await query(`CREATE INDEX IF NOT EXISTS idx_customer_favorites_customer ON customer_favorite_beauticians(customer_id)`);
-}
 
 function parseJsonArray(value, fallback = []) {
   if (Array.isArray(value)) return value;
@@ -701,18 +350,12 @@ function authenticateCustomer(req, res, next) {
   try {
     const payload = jwt.verify(token, JWT_SECRET, { issuer: 'beauty-home-service', audience: 'beauty-customer' });
     if (payload.scope !== 'customer') return res.status(401).json({ error: 'Invalid customer token' });
+    if (req.tenant?.id && payload.tenant_id && String(payload.tenant_id) !== String(req.tenant.id)) {
+      return res.status(403).json({ error: 'Customer session does not belong to this company' });
+    }
     req.customer = payload;
     return next();
   } catch (_) { return res.status(401).json({ error: 'Invalid or expired customer session' }); }
-}
-
-async function initSchemas() {
-  await ensureV14Schema();
-  await ensureV16Schema();
-  await ensureV17V18Schema();
-  await ensureV20Schema();
-  await ensureV21PaymentSchema();
-  await ensureV22V23Schema();
 }
 
 async function ensureInitialAdmin() {
@@ -835,7 +478,7 @@ async function authenticateAdmin(req, res, next) {
   try {
     const payload = jwt.verify(token, JWT_SECRET, { issuer: 'beauty-home-service', audience: 'beauty-admin' });
     if (payload.scope !== 'admin') return res.status(401).json({ error: 'Invalid admin token' });
-    const active = await query(`SELECT u.id, u.email, u.role, u.name, u.tenant_id, t.slug AS tenant_slug, t.business_name AS tenant_name, t.status AS tenant_status
+    const active = await query(`SELECT u.id, u.email, u.role, u.name, u.permissions, u.tenant_id, t.slug AS tenant_slug, t.business_name AS tenant_name, t.status AS tenant_status
       FROM admin_users u
       LEFT JOIN tenants t ON t.id=u.tenant_id
       WHERE u.id=$1::uuid AND u.status='active'`, [payload.id]);
@@ -851,10 +494,42 @@ async function authenticateAdmin(req, res, next) {
 
 app.use(tenantAware);
 
+async function assertAdminLoginAllowed(identity, ipAddress) {
+  try {
+    const result = await query(
+      `SELECT COUNT(*)::int AS count FROM auth_login_attempts
+       WHERE identity=$1 AND successful=0 AND created_at > NOW()-INTERVAL '${ADMIN_LOGIN_WINDOW_MINUTES} minutes'
+       AND (ip_address=$2 OR $2 IS NULL)`,
+      [identity, ipAddress || null]
+    );
+    if (Number(result.rows[0]?.count || 0) >= ADMIN_LOGIN_MAX_FAILURES) {
+      const error = new Error('Too many failed login attempts. Try again later.');
+      error.status = 429;
+      throw error;
+    }
+  } catch (error) {
+    if (error.status) throw error;
+    console.warn('admin_login_rate_limit_unavailable', error.message);
+  }
+}
+
+async function recordAdminLoginAttempt(identity, ipAddress, successful) {
+  try {
+    await query(
+      `INSERT INTO auth_login_attempts (identity, ip_address, successful) VALUES ($1,$2,$3)`,
+      [identity, ipAddress || null, !!successful]
+    );
+    await query(`DELETE FROM auth_login_attempts WHERE created_at < DATE_SUB(NOW(), INTERVAL 7 DAY)`).catch(() => null);
+  } catch (error) {
+    console.warn('admin_login_attempt_record_failed', error.message);
+  }
+}
+
 app.post('/api/admin/login', async (req, res) => {
   try {
     const inputEmail = String(req.body?.email || '').trim().toLowerCase();
     const inputPassword = String(req.body?.password || '').trim();
+    const loginIp = getClientIp(req);
 
     const adminEmail = String(process.env.ADMIN_EMAIL || DEFAULT_ADMIN_EMAIL || '').trim().toLowerCase();
     const adminPassword = String(process.env.ADMIN_PASSWORD || DEFAULT_ADMIN_PASSWORD || '').trim();
@@ -867,11 +542,13 @@ app.post('/api/admin/login', async (req, res) => {
       return res.status(500).json({ error: 'Admin login is not configured' });
     }
 
+    await assertAdminLoginAllowed(inputEmail, loginIp);
+
     let user = null;
 
     if (adminEmail && adminPassword && inputEmail === adminEmail && inputPassword === adminPassword) {
       const existing = await query(
-        `SELECT u.id, u.name, u.email, u.role, u.status, u.tenant_id, t.slug AS tenant_slug FROM admin_users u LEFT JOIN tenants t ON t.id=u.tenant_id WHERE LOWER(u.email)=LOWER($1) LIMIT 1`,
+        `SELECT u.id, u.name, u.email, u.role, u.permissions, u.status, u.tenant_id, t.slug AS tenant_slug FROM admin_users u LEFT JOIN tenants t ON t.id=u.tenant_id WHERE LOWER(u.email)=LOWER($1) LIMIT 1`,
         [adminEmail]
       );
 
@@ -892,7 +569,7 @@ app.post('/api/admin/login', async (req, res) => {
         const created = await query(
           `INSERT INTO admin_users (name, email, password_hash, role, status, tenant_id)
            VALUES ($1,$2,$3,'tenant_owner','active',$4)
-           RETURNING id, name, email, role, status, tenant_id`,
+           RETURNING id, name, email, role, permissions, status, tenant_id`,
           ['System Admin', adminEmail, passwordHash, req.tenant?.id || null]
         );
         user = created.rows[0];
@@ -901,7 +578,7 @@ app.post('/api/admin/login', async (req, res) => {
 
     if (!user) {
       const dbUser = await query(
-        `SELECT u.id, u.name, u.email, u.password_hash, u.role, u.status, u.tenant_id, t.slug AS tenant_slug
+        `SELECT u.id, u.name, u.email, u.password_hash, u.role, u.permissions, u.status, u.tenant_id, t.slug AS tenant_slug
          FROM admin_users u
          LEFT JOIN tenants t ON t.id=u.tenant_id
          WHERE LOWER(u.email)=LOWER($1) AND u.status='active'
@@ -918,8 +595,12 @@ app.post('/api/admin/login', async (req, res) => {
     }
 
     if (!user) {
+      await recordAdminLoginAttempt(inputEmail, loginIp, false);
       return res.status(401).json({ error: 'Invalid login details' });
     }
+
+    await recordAdminLoginAttempt(inputEmail, loginIp, true);
+    await query(`UPDATE admin_users SET last_login_at=NOW(), updated_at=NOW() WHERE id=$1::uuid`, [user.id]).catch(() => null);
 
     const token = signAdminToken({
       id: user.id,
@@ -938,13 +619,14 @@ app.post('/api/admin/login', async (req, res) => {
         name: user.name || 'Admin',
         email: String(user.email || inputEmail).trim().toLowerCase(),
         role: user.role || 'tenant_owner',
+        permissions: parsePermissions(user.permissions),
         tenant_id: user.tenant_id || req.tenant?.id || null,
         tenant_slug: user.tenant_slug || req.tenant?.slug || null
       }
     });
   } catch (error) {
-    res.status(500).json({
-      error: 'Failed to login',
+    res.status(error.status || 500).json({
+      error: error.status ? error.message : 'Failed to login',
       details: error.message
     });
   }
@@ -1005,7 +687,7 @@ app.get('/api/districts/:cityId', async (req, res) => {
 
 
 async function ensureDefaultServiceCategories() {
-  const existingCategories = await query(`SELECT COUNT(*)::int AS count FROM service_categories`);
+  const existingCategories = await query(`SELECT COUNT(*)::int AS count FROM service_categories WHERE name_ar IN ('الحناء','المكياج','الشعر','العناية')`);
   if (Number(existingCategories.rows[0]?.count || 0) > 0) return;
   const cats = [
     ['الحناء', 'Henna', 'خدمات الحناء والنقوش'],
@@ -1045,7 +727,7 @@ app.get('/api/services', async (req, res) => {
     FROM services s
     LEFT JOIN service_categories sc ON sc.id=s.category_id
     ${where}
-    ORDER BY sc.sort_order, s.sort_order, s.min_price NULLS LAST, COALESCE(s.name_ar, s.name)
+    ORDER BY sc.sort_order, s.sort_order, (s.min_price IS NULL), s.min_price, COALESCE(s.name_ar, s.name)
     `, params);
     res.json(result.rows);
   } catch (error) { if (!validationResponse(error, res)) res.status(500).json({ error: 'Failed to load services' }); }
@@ -1097,9 +779,12 @@ async function validateBookingRelationships({ regionId, cityId, districtId, serv
   return service.rows[0].category_id;
 }
 
-app.post('/api/bookings', async (req, res) => {
+async function createBookingRecord(req, res, { sourceOverride = null, requirePublicBooking = true } = {}) {
   try {
     const b = req.body || {};
+    if (requirePublicBooking && req.tenant?.public_booking_enabled === false) {
+      return res.status(403).json({ error: 'Public booking is currently disabled for this company' });
+    }
     const shape = validateBookingShape(b);
     const regionId = b.region_id || await findOrCreateRegion(b.region);
     const cityId = b.city_id || await findOrCreateCity(b.city, regionId);
@@ -1109,8 +794,10 @@ app.post('/api/bookings', async (req, res) => {
     const actualCategoryId = await validateBookingRelationships({ regionId, cityId, districtId, serviceId, serviceCategoryId: b.service_category_id || null, preferredArtistId });
     const serviceCategoryId = b.service_category_id || actualCategoryId;
     const bookingNumber = await generateBookingNumber();
-    const bookingSource = nullable(b.booking_source || b.source || req.headers['x-booking-source']) || shape.source;
-    if (!['web','mobile','admin','legacy'].includes(bookingSource)) throw new ApiValidationError('Invalid booking source', { booking_source: 'invalid' });
+    const bookingSource = sourceOverride || nullable(b.booking_source || b.source || req.headers['x-booking-source']) || shape.source;
+    if (!['web','mobile','admin','legacy'].includes(bookingSource) || (!sourceOverride && bookingSource === 'admin')) {
+      throw new ApiValidationError('Invalid booking source', { booking_source: 'invalid' });
+    }
     const customerId = await findOrCreateCustomer({ ...b, region_id: regionId, city_id: cityId, district_id: districtId });
 
     if (!customerId) return res.status(400).json({ error: 'Customer is required. Send customer_id or phone.' });
@@ -1143,11 +830,34 @@ app.post('/api/bookings', async (req, res) => {
     console.error('Create booking error:', error);
     res.status(500).json({ error: 'Failed to create booking', details: error.message });
   }
-});
+}
+
+app.post('/api/bookings', (req, res) => createBookingRecord(req, res, { requirePublicBooking: true }));
 
 
-function getPgDumpExecutable() {
-  return process.env.PG_DUMP_PATH || (process.env.POSTGRES_BIN ? path.join(process.env.POSTGRES_BIN, process.platform === 'win32' ? 'pg_dump.exe' : 'pg_dump') : 'pg_dump');
+function mysqlConfigFromEnv() {
+  const url = process.env.MYSQL_URL || process.env.DATABASE_URL;
+  if (url && /^mysql:\/\//i.test(url)) {
+    const parsed = new URL(url);
+    return {
+      host: parsed.hostname || '127.0.0.1',
+      port: parsed.port || '3306',
+      user: decodeURIComponent(parsed.username || 'root'),
+      password: decodeURIComponent(parsed.password || ''),
+      database: parsed.pathname.replace(/^\//, '')
+    };
+  }
+  return {
+    host: process.env.MYSQL_HOST || '127.0.0.1',
+    port: process.env.MYSQL_PORT || '3306',
+    user: process.env.MYSQL_USER || 'root',
+    password: process.env.MYSQL_PASSWORD || '',
+    database: process.env.MYSQL_DATABASE || 'beauty_home_service'
+  };
+}
+
+function getMysqlDumpExecutable() {
+  return process.env.MYSQLDUMP_PATH || 'mysqldump';
 }
 
 function buildBackupFileName(source) {
@@ -1159,32 +869,41 @@ async function ensureBackupDir() {
   await fs.mkdir(BACKUP_DIR, { recursive: true });
 }
 
-async function runPgDump(connectionString, source) {
-  if (!connectionString) {
-    const label = source === 'supabase' ? 'SUPABASE_DATABASE_URL' : 'LOCAL_DATABASE_URL أو DATABASE_URL';
-    const error = new Error(`${label} غير موجود في ملف البيئة.`);
+async function runMysqlDump(source = 'mysql') {
+  const config = mysqlConfigFromEnv();
+  if (!config.database) {
+    const error = new Error('MYSQL_DATABASE is missing from the environment.');
     error.statusCode = 400;
     throw error;
   }
   await ensureBackupDir();
   const fileName = buildBackupFileName(source);
   const filePath = path.join(BACKUP_DIR, fileName);
-  const pgDump = getPgDumpExecutable();
-  const args = ['--format=plain', '--no-owner', '--no-privileges', '--encoding=UTF8', '--file', filePath, connectionString];
+  const args = [
+    '--single-transaction',
+    '--quick',
+    '--default-character-set=utf8mb4',
+    '-h', config.host,
+    '-P', String(config.port || 3306),
+    '-u', config.user,
+    `--result-file=${filePath}`,
+    config.database
+  ];
+  if (config.password) args.splice(args.length - 1, 0, `-p${config.password}`);
 
   await new Promise((resolve, reject) => {
-    const child = spawn(pgDump, args, { windowsHide: true });
+    const child = spawn(getMysqlDumpExecutable(), args, { windowsHide: true });
     let stderr = '';
     child.stderr.on('data', chunk => { stderr += chunk.toString(); });
     child.on('error', error => {
       const message = error.code === 'ENOENT'
-        ? `لم يتم العثور على pg_dump. أضف PG_DUMP_PATH في ملف .env مثل: C:\\Program Files\\PostgreSQL\\18\\bin\\pg_dump.exe`
+        ? 'mysqldump was not found. Add MYSQLDUMP_PATH to backend/.env if it is not in PATH.'
         : error.message;
       reject(new Error(message));
     });
     child.on('close', code => {
       if (code === 0) return resolve();
-      reject(new Error(stderr.trim() || `pg_dump failed with exit code ${code}`));
+      reject(new Error(stderr.trim() || `mysqldump failed with exit code ${code}`));
     });
   });
 
@@ -1197,17 +916,52 @@ async function listBackupFiles() {
   const entries = await fs.readdir(BACKUP_DIR, { withFileTypes: true });
   const files = [];
   for (const entry of entries) {
-    if (!entry.isFile() || !/^beauty_(local|supabase)_backup_.*\.sql$/i.test(entry.name)) continue;
+    if (!entry.isFile() || !/^beauty_(mysql|local)_backup_.*\.sql$/i.test(entry.name)) continue;
     const filePath = path.join(BACKUP_DIR, entry.name);
     const stat = await fs.stat(filePath);
     files.push({
       file_name: entry.name,
-      source: entry.name.startsWith('beauty_supabase_') ? 'supabase' : 'local',
+      source: 'mysql',
       size_bytes: stat.size,
       created_at: stat.mtime.toISOString()
     });
   }
   return files.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+}
+
+async function buildTenantDataExport(tenantId) {
+  const exportQueries = [
+    ['tenant', `SELECT id, business_name, slug, contact_email, contact_phone, logo_url, cover_image_url, tagline_ar, description_ar, primary_color, secondary_color, accent_color, whatsapp_number, support_email, public_booking_enabled, subscription_plan, subscription_status, status, onboarding_status, created_at, updated_at FROM tenants WHERE id=$1::uuid`],
+    ['service_categories', `SELECT * FROM service_categories WHERE tenant_id=$1::uuid ORDER BY sort_order, name_ar`],
+    ['services', `SELECT * FROM services WHERE tenant_id=$1::uuid ORDER BY sort_order, COALESCE(name_ar, name)`],
+    ['occasion_types', `SELECT * FROM occasion_types WHERE tenant_id=$1::uuid ORDER BY sort_order, name_ar`],
+    ['customers', `SELECT id, name, phone, email, region_id, city_id, district_id, default_address, status, created_at, updated_at FROM customers WHERE tenant_id=$1::uuid ORDER BY created_at DESC`],
+    ['customer_addresses', `SELECT * FROM customer_addresses WHERE tenant_id=$1::uuid ORDER BY created_at DESC`],
+    ['beauticians', `SELECT * FROM artists WHERE tenant_id=$1::uuid ORDER BY created_at DESC`],
+    ['beautician_services', `SELECT * FROM beautician_services WHERE tenant_id=$1::uuid`],
+    ['beautician_coverage_regions', `SELECT * FROM beautician_coverage_regions WHERE tenant_id=$1::uuid`],
+    ['beautician_coverage_cities', `SELECT * FROM beautician_coverage_cities WHERE tenant_id=$1::uuid`],
+    ['beautician_coverage_districts', `SELECT * FROM beautician_coverage_districts WHERE tenant_id=$1::uuid`],
+    ['beautician_portfolio', `SELECT * FROM beautician_portfolio WHERE tenant_id=$1::uuid ORDER BY created_at DESC`],
+    ['bookings', `SELECT * FROM bookings WHERE tenant_id=$1::uuid ORDER BY created_at DESC`],
+    ['booking_status_history', `SELECT * FROM booking_status_history WHERE tenant_id=$1::uuid ORDER BY created_at DESC`],
+    ['booking_events', `SELECT * FROM booking_events WHERE tenant_id=$1::uuid ORDER BY created_at DESC`],
+    ['payment_records', `SELECT * FROM payment_records WHERE tenant_id=$1::uuid ORDER BY created_at DESC`],
+    ['beautician_reviews', `SELECT * FROM beautician_reviews WHERE tenant_id=$1::uuid ORDER BY created_at DESC`],
+    ['communication_templates', `SELECT * FROM communication_templates WHERE tenant_id=$1::uuid ORDER BY sort_order, created_at DESC`]
+  ];
+  const data = {};
+  for (const [name, sql] of exportQueries) {
+    const result = await query(sql, [tenantId]);
+    data[name] = result.rows;
+  }
+  return {
+    ok: true,
+    export_type: 'tenant_data',
+    tenant_id: tenantId,
+    generated_at: new Date().toISOString(),
+    data
+  };
 }
 
 
@@ -1228,12 +982,42 @@ async function writeAuditLog({ actor, tenantId = null, action, entityType, entit
     if (!action || !entityType) return;
     await query(
       `INSERT INTO audit_logs (tenant_id, actor_admin_id, actor_email, actor_role, action, entity_type, entity_id, details)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb)`,
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
       [tenantId, actor?.id || null, actor?.email || null, actor?.role || null, action, entityType, entityId, JSON.stringify(details || {})]
     );
   } catch (error) {
     console.warn('audit_log_failed', error.message);
   }
+}
+
+async function uploadTenantBrandImage({ imageDataUrl, tenantId, field, folder, actor = null }) {
+  if (!imageDataUrl || typeof imageDataUrl !== 'string') {
+    throw new ApiValidationError('image_data_url is required', { image_data_url: 'required' });
+  }
+  if (!['logo_url', 'cover_image_url'].includes(field)) {
+    throw new ApiValidationError('Invalid brand image target', { field: 'invalid' });
+  }
+  const uploaded = await uploadToCloudinary(
+    imageDataUrl,
+    folder || `beauty-home-service/tenants/${tenantId}/${field === 'logo_url' ? 'logos' : 'covers'}`
+  );
+  const result = await runWithTenantContext({ role: 'super_admin' }, () =>
+    query(`UPDATE tenants SET ${field}=$1, updated_at=NOW() WHERE id=$2::uuid RETURNING *`, [uploaded.url, tenantId])
+  );
+  if (!result.rows[0]) {
+    const err = new Error('Tenant not found');
+    err.status = 404;
+    throw err;
+  }
+  await writeAuditLog({
+    actor,
+    tenantId,
+    action: field === 'logo_url' ? 'tenant_logo_uploaded' : 'tenant_cover_uploaded',
+    entityType: 'tenant',
+    entityId: tenantId,
+    details: { field, provider: uploaded.provider || null }
+  });
+  return { ok: true, field, url: uploaded.url, tenant: result.rows[0], ...uploaded };
 }
 
 const tenantReturnColumns = `t.*,
@@ -1323,6 +1107,40 @@ app.patch('/api/super-admin/tenants/:id', async (req, res) => {
   } catch (error) { res.status(500).json({ error: 'Failed to update tenant', details: error.message }); }
 });
 
+app.post('/api/super-admin/tenants/:id/logo', async (req, res) => {
+  try {
+    assertUuid(req.params.id, 'id');
+    const uploaded = await uploadTenantBrandImage({
+      imageDataUrl: req.body?.image_data_url,
+      tenantId: req.params.id,
+      field: 'logo_url',
+      folder: req.body?.folder,
+      actor: req.admin
+    });
+    res.json(uploaded);
+  } catch (error) {
+    if (validationResponse(error, res)) return;
+    res.status(error.status || 500).json({ error: 'Failed to upload tenant logo', details: error.message });
+  }
+});
+
+app.post('/api/super-admin/tenants/:id/cover', async (req, res) => {
+  try {
+    assertUuid(req.params.id, 'id');
+    const uploaded = await uploadTenantBrandImage({
+      imageDataUrl: req.body?.image_data_url,
+      tenantId: req.params.id,
+      field: 'cover_image_url',
+      folder: req.body?.folder,
+      actor: req.admin
+    });
+    res.json(uploaded);
+  } catch (error) {
+    if (validationResponse(error, res)) return;
+    res.status(error.status || 500).json({ error: 'Failed to upload tenant cover', details: error.message });
+  }
+});
+
 app.post('/api/super-admin/tenants/:id/admin-users', async (req, res) => {
   try {
     assertUuid(req.params.id, 'id');
@@ -1395,7 +1213,7 @@ app.get('/api/admin/tenant', authenticateAdmin, async (req, res) => {
   } catch (error) { res.status(500).json({ error: 'تعذر تحميل إعدادات الشركة', details: error.message }); }
 });
 
-app.patch('/api/admin/tenant', authenticateAdmin, async (req, res) => {
+app.patch('/api/admin/tenant', authenticateAdmin, requirePermission('manage_tenant_settings'), async (req, res) => {
   try {
     if (!['tenant_owner','admin','super_admin'].includes(req.admin.role)) return res.status(403).json({ error: 'غير مصرح' });
     const tenantId = req.admin.role === 'super_admin' && req.body?.tenant_id ? req.body.tenant_id : req.admin.tenant_id;
@@ -1411,6 +1229,42 @@ app.patch('/api/admin/tenant', authenticateAdmin, async (req, res) => {
   } catch (error) { res.status(500).json({ error: 'تعذر تحديث إعدادات الشركة', details: error.message }); }
 });
 
+app.post('/api/admin/tenant/logo', authenticateAdmin, requirePermission('manage_tenant_settings'), async (req, res) => {
+  try {
+    const tenantId = req.admin.role === 'super_admin' && req.body?.tenant_id ? req.body.tenant_id : req.admin.tenant_id;
+    if (!tenantId) return res.status(400).json({ error: 'No tenant available for logo upload' });
+    const uploaded = await uploadTenantBrandImage({
+      imageDataUrl: req.body?.image_data_url,
+      tenantId,
+      field: 'logo_url',
+      folder: req.body?.folder,
+      actor: req.admin
+    });
+    res.json(uploaded);
+  } catch (error) {
+    if (validationResponse(error, res)) return;
+    res.status(error.status || 500).json({ error: 'Failed to upload tenant logo', details: error.message });
+  }
+});
+
+app.post('/api/admin/tenant/cover', authenticateAdmin, requirePermission('manage_tenant_settings'), async (req, res) => {
+  try {
+    const tenantId = req.admin.role === 'super_admin' && req.body?.tenant_id ? req.body.tenant_id : req.admin.tenant_id;
+    if (!tenantId) return res.status(400).json({ error: 'No tenant available for cover upload' });
+    const uploaded = await uploadTenantBrandImage({
+      imageDataUrl: req.body?.image_data_url,
+      tenantId,
+      field: 'cover_image_url',
+      folder: req.body?.folder,
+      actor: req.admin
+    });
+    res.json(uploaded);
+  } catch (error) {
+    if (validationResponse(error, res)) return;
+    res.status(error.status || 500).json({ error: 'Failed to upload tenant cover', details: error.message });
+  }
+});
+
 app.use('/api/admin', (req, res, next) => {
   if (req.path === '/login') return next();
   return authenticateAdmin(req, res, () => {
@@ -1421,7 +1275,7 @@ app.use('/api/admin', (req, res, next) => {
   });
 });
 
-app.get('/api/admin/backups', async (req, res) => {
+app.get('/api/admin/backups', requireSuperAdmin, async (req, res) => {
   try {
     const files = await listBackupFiles();
     res.json({ ok: true, backup_dir: BACKUP_DIR, files });
@@ -1430,33 +1284,44 @@ app.get('/api/admin/backups', async (req, res) => {
   }
 });
 
-app.post('/api/admin/backups/local', async (req, res) => {
+app.post('/api/admin/backups/local', requireSuperAdmin, async (req, res) => {
   try {
-    const backup = await runPgDump(process.env.LOCAL_DATABASE_URL || process.env.DATABASE_URL, 'local');
+    const backup = await runMysqlDump('mysql');
+    await writeAuditLog({ actor: req.admin, action: 'database_backup_created', entityType: 'backup', entityId: null, details: { fileName: backup.fileName, size_bytes: backup.size_bytes } });
     res.json({ ok: true, ...backup, download_url: `/api/admin/backups/download/${encodeURIComponent(backup.fileName)}` });
   } catch (error) {
-    res.status(error.statusCode || 500).json({ error: 'Failed to create local backup', details: error.message });
+    res.status(error.statusCode || 500).json({ error: 'Failed to create MySQL backup', details: error.message });
   }
 });
 
-app.post('/api/admin/backups/supabase', async (req, res) => {
-  try {
-    const backup = await runPgDump(process.env.SUPABASE_DATABASE_URL, 'supabase');
-    res.json({ ok: true, ...backup, download_url: `/api/admin/backups/download/${encodeURIComponent(backup.fileName)}` });
-  } catch (error) {
-    res.status(error.statusCode || 500).json({ error: 'Failed to create Supabase backup', details: error.message });
-  }
-});
-
-app.get('/api/admin/backups/download/:fileName', async (req, res) => {
+app.get('/api/admin/backups/download/:fileName', requireSuperAdmin, async (req, res) => {
   try {
     const fileName = path.basename(req.params.fileName || '');
-    if (!/^beauty_(local|supabase)_backup_.*\.sql$/i.test(fileName)) return res.status(400).json({ error: 'Invalid backup file name' });
+    if (!/^beauty_(mysql|local)_backup_.*\.sql$/i.test(fileName)) return res.status(400).json({ error: 'Invalid backup file name' });
     const filePath = path.join(BACKUP_DIR, fileName);
     await fs.access(filePath);
+    await writeAuditLog({ actor: req.admin, action: 'database_backup_downloaded', entityType: 'backup', entityId: null, details: { fileName } });
     res.download(filePath, fileName);
   } catch (error) {
     res.status(404).json({ error: 'Backup file not found', details: error.message });
+  }
+});
+
+app.get('/api/admin/exports/tenant-data', requirePermission('tenant_data_export'), async (req, res) => {
+  try {
+    const tenantId = req.admin.role === 'super_admin' && req.query.tenant_id ? String(req.query.tenant_id) : req.admin.tenant_id;
+    if (!tenantId) return res.status(400).json({ error: 'No tenant is linked to this admin account' });
+    assertUuid(tenantId, 'tenant_id');
+    const exported = await runWithTenantContext({ tenantId, role: 'tenant_admin' }, () => buildTenantDataExport(tenantId));
+    await writeAuditLog({ actor: req.admin, tenantId, action: 'tenant_data_exported', entityType: 'tenant', entityId: tenantId, details: { tables: Object.keys(exported.data) } });
+    const slug = String(req.admin.tenant_slug || req.tenant?.slug || tenantId).replace(/[^a-z0-9-]+/gi, '-').replace(/-+/g, '-').replace(/^-+|-+$/g, '') || 'tenant';
+    const fileName = `tenant-export-${slug}-${new Date().toISOString().slice(0, 10)}.json`;
+    res.setHeader('Content-Type', 'application/json; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
+    res.json(exported);
+  } catch (error) {
+    if (validationResponse(error, res)) return;
+    res.status(500).json({ error: 'Failed to export tenant data', details: error.message });
   }
 });
 
@@ -1501,6 +1366,10 @@ async function bookingsQuery(where = '', params = [], options = {}) {
   `, params);
 }
 
+app.post('/api/admin/bookings', requirePermission('manage_bookings'), (req, res) =>
+  createBookingRecord(req, res, { sourceOverride: 'admin', requirePublicBooking: false })
+);
+
 app.get('/api/admin/bookings', async (req, res) => {
   try {
     const result = await bookingsQuery('', [], { limit: req.query.limit, offset: req.query.offset });
@@ -1521,7 +1390,7 @@ app.get('/api/admin/bookings/:id', async (req, res) => {
   }
 });
 
-app.patch('/api/admin/bookings/:id/status', async (req, res) => {
+app.patch('/api/admin/bookings/:id/status', requirePermission('manage_bookings'), async (req, res) => {
   try {
     assertUuid(req.params.id, 'id');
     const requestedStatus = normalizeBookingStatus(req.body.status || req.body.new_status);
@@ -1561,7 +1430,7 @@ app.patch('/api/admin/bookings/:id/status', async (req, res) => {
   }
 });
 
-app.patch('/api/admin/bookings/:id/details', async (req, res) => {
+app.patch('/api/admin/bookings/:id/details', requirePermission('manage_bookings'), async (req, res) => {
   try {
     const b = req.body;
     const result = await query(`
@@ -1575,7 +1444,7 @@ app.patch('/api/admin/bookings/:id/details', async (req, res) => {
   } catch (error) { res.status(500).json({ error: 'Failed to update booking details', details: error.message }); }
 });
 
-app.patch('/api/admin/bookings/:id/payment', async (req, res) => {
+app.patch('/api/admin/bookings/:id/payment', requirePermission('manage_payments'), async (req, res) => {
   try {
     assertUuid(req.params.id, 'id');
     const allowed = ['unpaid', 'deposit_paid', 'paid', 'refunded'];
@@ -1590,7 +1459,7 @@ app.patch('/api/admin/bookings/:id/payment', async (req, res) => {
 });
 
 
-app.patch('/api/admin/bookings/:id/payment-details', async (req, res) => {
+app.patch('/api/admin/bookings/:id/payment-details', requirePermission('manage_payments'), async (req, res) => {
   try {
     assertUuid(req.params.id, 'id');
     const allowed = ['unpaid', 'deposit_paid', 'paid', 'refunded'];
@@ -1627,7 +1496,7 @@ app.get('/api/admin/payments', async (req, res) => {
   } catch (error) { res.status(500).json({ error: 'Failed to load payment records', details: error.message }); }
 });
 
-app.delete('/api/admin/bookings/:id', async (req, res) => {
+app.delete('/api/admin/bookings/:id', requirePermission('manage_bookings'), async (req, res) => {
   try {
     await query(`DELETE FROM booking_status_history WHERE booking_id=$1`, [req.params.id]);
     await query(`DELETE FROM artist_reviews WHERE booking_id=$1`, [req.params.id]).catch(() => null);
@@ -1636,7 +1505,7 @@ app.delete('/api/admin/bookings/:id', async (req, res) => {
   } catch (error) { res.status(500).json({ error: 'Failed to delete booking', details: error.message }); }
 });
 
-app.patch('/api/admin/bookings/:id/assign-artist', async (req, res) => {
+app.patch('/api/admin/bookings/:id/assign-artist', requirePermission('manage_bookings'), async (req, res) => {
   try {
     const { artist_id, force } = req.body;
     assertUuid(req.params.id, 'id');
@@ -1704,7 +1573,7 @@ async function validateCoverageSelection(regionIds, cityIds, districtIds) {
   }
 }
 
-app.patch('/api/admin/beauticians/:id/availability', async (req, res) => {
+app.patch('/api/admin/beauticians/:id/availability', requirePermission('manage_beauticians'), async (req, res) => {
   try {
     assertUuid(req.params.id, 'id');
     const b = req.body || {};
@@ -1718,17 +1587,23 @@ app.patch('/api/admin/beauticians/:id/availability', async (req, res) => {
     if (!Number.isInteger(maxDaily) || maxDaily < 1 || maxDaily > 20) throw new ApiValidationError('max_daily_bookings must be between 1 and 20', { max_daily_bookings: 'invalid' });
     await validateCoverageSelection(coverageRegions, coverageCities, coverageDistricts);
     const result = await transaction(async client => {
-      const updated = await client.query(`UPDATE artists SET availability_status=$1::varchar, working_days=$2::jsonb,
-        work_start_time=$3::time, work_end_time=$4::time, max_daily_bookings=$5::int,
-        coverage_region_ids=$6::jsonb, coverage_city_ids=$7::jsonb, coverage_district_ids=$8::jsonb, updated_at=NOW()
-        WHERE id=$9::uuid RETURNING *`, [availabilityStatus, workingDays, b.work_start_time || '10:00', b.work_end_time || '22:00', maxDaily, JSON.stringify(coverageRegions), JSON.stringify(coverageCities), JSON.stringify(coverageDistricts), req.params.id]);
+      const updated = await client.query(`UPDATE artists SET availability_status=$1, working_days=$2,
+        work_start_time=$3, work_end_time=$4, max_daily_bookings=$5,
+        coverage_region_ids=$6, coverage_city_ids=$7, coverage_district_ids=$8, updated_at=NOW()
+        WHERE id=$9 RETURNING *`, [availabilityStatus, workingDays, b.work_start_time || '10:00', b.work_end_time || '22:00', maxDaily, JSON.stringify(coverageRegions), JSON.stringify(coverageCities), JSON.stringify(coverageDistricts), req.params.id]);
       if (!updated.rows[0]) return updated;
       await client.query(`DELETE FROM beautician_coverage_regions WHERE beautician_id=$1::uuid`, [req.params.id]);
       await client.query(`DELETE FROM beautician_coverage_cities WHERE beautician_id=$1::uuid`, [req.params.id]);
       await client.query(`DELETE FROM beautician_coverage_districts WHERE beautician_id=$1::uuid`, [req.params.id]);
-      if (coverageRegions.length) await client.query(`INSERT INTO beautician_coverage_regions (beautician_id,region_id) SELECT $1::uuid, unnest($2::uuid[])`, [req.params.id, coverageRegions]);
-      if (coverageCities.length) await client.query(`INSERT INTO beautician_coverage_cities (beautician_id,city_id) SELECT $1::uuid, unnest($2::uuid[])`, [req.params.id, coverageCities]);
-      if (coverageDistricts.length) await client.query(`INSERT INTO beautician_coverage_districts (beautician_id,district_id) SELECT $1::uuid, unnest($2::uuid[])`, [req.params.id, coverageDistricts]);
+      for (const regionId of coverageRegions) {
+        await client.query(`INSERT INTO beautician_coverage_regions (beautician_id,region_id) VALUES ($1,$2)`, [req.params.id, regionId]);
+      }
+      for (const cityId of coverageCities) {
+        await client.query(`INSERT INTO beautician_coverage_cities (beautician_id,city_id) VALUES ($1,$2)`, [req.params.id, cityId]);
+      }
+      for (const districtId of coverageDistricts) {
+        await client.query(`INSERT INTO beautician_coverage_districts (beautician_id,district_id) VALUES ($1,$2)`, [req.params.id, districtId]);
+      }
       return updated;
     });
     if (!result.rows[0]) return res.status(404).json({ error: 'Beautician not found' });
@@ -1790,7 +1665,7 @@ function catalogRoutes(name, table, fields, listFn) {
     try { const result = await listFn(req.query.all === '1'); res.json(result.rows); }
     catch (error) { res.status(500).json({ error: `Failed to load ${name}`, details: error.message }); }
   });
-  app.post(`/api/admin/${name}`, async (req, res) => {
+  app.post(`/api/admin/${name}`, requirePermission('manage_catalog'), async (req, res) => {
     try {
       await validateCatalogPayload(table, req.body || {}, false);
       const columns = fields.filter(f => req.body[f] !== undefined);
@@ -1801,7 +1676,7 @@ function catalogRoutes(name, table, fields, listFn) {
       res.status(201).json(result.rows[0]);
     } catch (error) { if (!validationResponse(error, res)) res.status(500).json({ error: `Failed to create ${name}`, details: error.message }); }
   });
-  app.patch(`/api/admin/${name}/:id`, async (req, res) => {
+  app.patch(`/api/admin/${name}/:id`, requirePermission('manage_catalog'), async (req, res) => {
     try {
       assertUuid(req.params.id, 'id');
       await validateCatalogPayload(table, req.body || {}, true);
@@ -1814,14 +1689,14 @@ function catalogRoutes(name, table, fields, listFn) {
       res.json(result.rows[0]);
     } catch (error) { if (!validationResponse(error, res)) res.status(500).json({ error: `Failed to update ${name}`, details: error.message }); }
   });
-  app.patch(`/api/admin/${name}/:id/status`, async (req, res) => {
+  app.patch(`/api/admin/${name}/:id/status`, requirePermission('manage_catalog'), async (req, res) => {
     try {
       const result = await query(`UPDATE ${table} SET status=$1, updated_at=NOW() WHERE id=$2 RETURNING *`, [req.body.status || 'active', req.params.id]);
       if (!result.rows[0]) return res.status(404).json({ error: 'Not found' });
       res.json(result.rows[0]);
     } catch (error) { res.status(500).json({ error: `Failed to update ${name} status`, details: error.message }); }
   });
-  app.delete(`/api/admin/${name}/:id`, async (req, res) => {
+  app.delete(`/api/admin/${name}/:id`, requirePermission('manage_catalog'), async (req, res) => {
     try {
       await query(`UPDATE bookings SET ${table === 'regions' ? 'region_id' : table === 'cities' ? 'city_id' : table === 'districts' ? 'district_id' : table === 'service_categories' ? 'service_category_id' : 'service_id'}=NULL WHERE ${table === 'regions' ? 'region_id' : table === 'cities' ? 'city_id' : table === 'districts' ? 'district_id' : table === 'service_categories' ? 'service_category_id' : 'service_id'}=$1`, [req.params.id]).catch(() => null);
       if (table === 'regions') await query(`UPDATE cities SET region_id=NULL WHERE region_id=$1`, [req.params.id]).catch(() => null);
@@ -2048,7 +1923,7 @@ async function fetchSplLookup(kind, params, apiKey) {
 }
 
 
-app.post('/api/admin/import/saudi-open-data', async (req, res) => {
+app.post('/api/admin/import/saudi-open-data', requirePermission('import_locations'), async (req, res) => {
   try {
     const mode = req.body.mode || 'all';
     const summary = await importOpenSaudiLocations(mode);
@@ -2059,7 +1934,7 @@ app.post('/api/admin/import/saudi-open-data', async (req, res) => {
   }
 });
 
-app.post('/api/admin/import/spl', async (req, res) => {
+app.post('/api/admin/import/spl', requirePermission('import_locations'), async (req, res) => {
   try {
     const apiKey = req.body.api_key || process.env.SPL_API_KEY;
     const mode = req.body.mode || 'regions';
@@ -2163,7 +2038,7 @@ async function validateBeauticianPayload(a, { partial = false } = {}) {
   return serviceIds;
 }
 
-app.post(['/api/admin/artists','/api/admin/beauticians'], async (req, res) => {
+app.post(['/api/admin/artists','/api/admin/beauticians'], requirePermission('manage_beauticians'), async (req, res) => {
   try {
     const a = req.body || {};
     if (!a.name || !a.phone) return res.status(400).json({ error: 'Beautician name and phone are required.' });
@@ -2181,7 +2056,7 @@ app.post(['/api/admin/artists','/api/admin/beauticians'], async (req, res) => {
   } catch (error) { if (!validationResponse(error, res)) res.status(500).json({ error: 'Failed to create beautician', details: error.message }); }
 });
 
-app.patch(['/api/admin/artists/:id','/api/admin/beauticians/:id'], async (req, res) => {
+app.patch(['/api/admin/artists/:id','/api/admin/beauticians/:id'], requirePermission('manage_beauticians'), async (req, res) => {
   try {
     assertUuid(req.params.id, 'id');
     const serviceIds = await validateBeauticianPayload(req.body || {}, { partial: true });
@@ -2205,7 +2080,7 @@ app.patch(['/api/admin/artists/:id','/api/admin/beauticians/:id'], async (req, r
   } catch (error) { if (!validationResponse(error, res)) res.status(500).json({ error: 'Failed to update beautician', details: error.message }); }
 });
 
-app.delete(['/api/admin/artists/:id','/api/admin/beauticians/:id'], async (req, res) => {
+app.delete(['/api/admin/artists/:id','/api/admin/beauticians/:id'], requirePermission('manage_beauticians'), async (req, res) => {
   try {
     await query(`UPDATE bookings SET assigned_artist_id=NULL WHERE assigned_artist_id=$1`, [req.params.id]);
     await query(`DELETE FROM beautician_services WHERE beautician_id=$1`, [req.params.id]);
@@ -2261,7 +2136,7 @@ app.get('/api/beauticians', async (req, res) => {
       LEFT JOIN artist_reviews ar ON ar.artist_id=a.id
       WHERE ${where.join(' AND ')}
       GROUP BY a.id, r.name_ar, c.name_ar, mc.name_ar, ms.name_ar, ms.name
-      ORDER BY review_rating DESC NULLS LAST, portfolio_count DESC, a.name
+      ORDER BY (review_rating IS NULL), review_rating DESC, portfolio_count DESC, a.name
     `, params);
     res.json(result.rows);
   } catch (error) { if (!validationResponse(error, res)) res.status(500).json({ error: 'Failed to load beauticians', details: error.message }); }
@@ -2325,7 +2200,7 @@ app.get('/api/admin/beautician-portfolio', async (req, res) => {
   } catch (error) { res.status(500).json({ error: 'Failed to load portfolio', details: error.message }); }
 });
 
-app.post('/api/admin/beautician-portfolio', async (req, res) => {
+app.post('/api/admin/beautician-portfolio', requirePermission('manage_beauticians'), async (req, res) => {
   try {
     const p = req.body;
     if (!p.beautician_id || !p.title_ar || !p.image_url) return res.status(400).json({ error: 'beautician_id, title_ar and image_url are required' });
@@ -2337,7 +2212,7 @@ app.post('/api/admin/beautician-portfolio', async (req, res) => {
   } catch (error) { res.status(500).json({ error: 'Failed to create portfolio item', details: error.message }); }
 });
 
-app.patch('/api/admin/beautician-portfolio/:id', async (req, res) => {
+app.patch('/api/admin/beautician-portfolio/:id', requirePermission('manage_beauticians'), async (req, res) => {
   try {
     const allowed = ['beautician_id','service_category_id','service_id','title_ar','title_en','description','image_url','is_featured','status','sort_order'];
     const columns = allowed.filter(f => req.body[f] !== undefined);
@@ -2350,7 +2225,7 @@ app.patch('/api/admin/beautician-portfolio/:id', async (req, res) => {
   } catch (error) { res.status(500).json({ error: 'Failed to update portfolio item', details: error.message }); }
 });
 
-app.delete('/api/admin/beautician-portfolio/:id', async (req, res) => {
+app.delete('/api/admin/beautician-portfolio/:id', requirePermission('manage_beauticians'), async (req, res) => {
   try { await query(`DELETE FROM beautician_portfolio WHERE id=$1`, [req.params.id]); res.json({ ok: true, deleted_id: req.params.id }); }
   catch (error) { res.status(500).json({ error: 'Failed to delete portfolio item', details: error.message }); }
 });
@@ -2368,20 +2243,24 @@ app.get('/api/admin/beautician-reviews', async (req, res) => {
   } catch (error) { res.status(500).json({ error: 'Failed to load reviews', details: error.message }); }
 });
 
-app.post('/api/customer/reviews', async (req, res) => {
+app.post('/api/customer/reviews', authenticateCustomer, async (req, res) => {
   try {
     const r = req.body;
     if (!r.booking_id || !r.rating) return res.status(400).json({ error: 'booking_id and rating are required' });
-    const booking = await query(`SELECT id, customer_id, assigned_artist_id, preferred_artist_id FROM bookings WHERE id=$1`, [r.booking_id]);
+    const rating = Number(r.rating);
+    if (!Number.isInteger(rating) || rating < 1 || rating > 5) return res.status(400).json({ error: 'rating must be between 1 and 5' });
+    const booking = await query(`SELECT id, customer_id, assigned_artist_id, preferred_artist_id, status FROM bookings WHERE id=$1 AND customer_id=$2`, [r.booking_id, req.customer.id]);
     if (!booking.rows[0]) return res.status(404).json({ error: 'Booking not found' });
+    if (booking.rows[0].status !== 'completed') return res.status(409).json({ error: 'Reviews are available after the booking is completed' });
     const beauticianId = booking.rows[0].assigned_artist_id || booking.rows[0].preferred_artist_id;
+    if (!beauticianId) return res.status(409).json({ error: 'No beautician is attached to this booking' });
     const result = await query(`
       INSERT INTO beautician_reviews (booking_id, beautician_id, customer_id, rating, review_text, status)
       VALUES ($1,$2,$3,$4,$5,'published')
       ON CONFLICT (booking_id) DO UPDATE SET rating=EXCLUDED.rating, review_text=EXCLUDED.review_text, updated_at=NOW()
       RETURNING *
-    `, [r.booking_id, beauticianId, booking.rows[0].customer_id, Number(r.rating), nullable(r.review_text)]);
-    await query(`UPDATE bookings SET customer_review_rating=$1, customer_review_text=$2, updated_at=NOW() WHERE id=$3`, [Number(r.rating), nullable(r.review_text), r.booking_id]);
+    `, [r.booking_id, beauticianId, req.customer.id, rating, nullable(r.review_text)]);
+    await query(`UPDATE bookings SET customer_review_rating=$1, customer_review_text=$2, updated_at=NOW() WHERE id=$3 AND customer_id=$4`, [rating, nullable(r.review_text), r.booking_id, req.customer.id]);
     res.status(201).json(result.rows[0]);
   } catch (error) { res.status(500).json({ error: 'Failed to save review', details: error.message }); }
 });
@@ -2420,7 +2299,7 @@ app.get('/api/admin/bookings/:id/events', async (req, res) => {
   } catch (error) { res.status(500).json({ error: 'Failed to load booking events', details: error.message }); }
 });
 
-app.post('/api/admin/bookings/:id/events', async (req, res) => {
+app.post('/api/admin/bookings/:id/events', requirePermission('manage_bookings'), async (req, res) => {
   try {
     const event = await logBookingEvent(req.params.id, req.body.event_type || 'note', req.body.title || 'ملاحظة إدارية', req.body.description || req.body.note || '', 'admin', req.admin?.email || null, req.body.metadata || null);
     res.status(201).json(event);
@@ -2432,7 +2311,7 @@ app.get('/api/admin/communication-templates', async (req, res) => {
   catch (error) { res.status(500).json({ error: 'Failed to load communication templates', details: error.message }); }
 });
 
-app.post('/api/admin/communication-templates', async (req, res) => {
+app.post('/api/admin/communication-templates', requirePermission('manage_tenant_settings'), async (req, res) => {
   try {
     const t = req.body;
     const result = await query(`INSERT INTO communication_templates (code, title_ar, body_ar, channel, status, sort_order) VALUES ($1,$2,$3,$4,$5,$6) RETURNING *`, [t.code || null, t.title_ar, t.body_ar, t.channel || 'whatsapp', t.status || 'active', t.sort_order || 0]);
@@ -2440,7 +2319,7 @@ app.post('/api/admin/communication-templates', async (req, res) => {
   } catch (error) { res.status(500).json({ error: 'Failed to create communication template', details: error.message }); }
 });
 
-app.patch('/api/admin/communication-templates/:id', async (req, res) => {
+app.patch('/api/admin/communication-templates/:id', requirePermission('manage_tenant_settings'), async (req, res) => {
   try {
     const allowed = ['code','title_ar','body_ar','channel','status','sort_order'];
     const cols = allowed.filter(f => req.body[f] !== undefined);
@@ -2453,12 +2332,12 @@ app.patch('/api/admin/communication-templates/:id', async (req, res) => {
   } catch (error) { res.status(500).json({ error: 'Failed to update communication template', details: error.message }); }
 });
 
-app.delete('/api/admin/communication-templates/:id', async (req, res) => {
+app.delete('/api/admin/communication-templates/:id', requirePermission('manage_tenant_settings'), async (req, res) => {
   try { await query(`DELETE FROM communication_templates WHERE id=$1`, [req.params.id]); res.json({ ok: true, deleted_id: req.params.id }); }
   catch (error) { res.status(500).json({ error: 'Failed to delete communication template', details: error.message }); }
 });
 
-app.post('/api/admin/bookings/:id/whatsapp', async (req, res) => {
+app.post('/api/admin/bookings/:id/whatsapp', requirePermission('manage_bookings'), async (req, res) => {
   try {
     const bookingRes = await bookingsQuery(`WHERE b.id=$1`, [req.params.id]);
     const booking = bookingRes.rows[0];
@@ -2478,39 +2357,56 @@ app.post('/api/admin/bookings/:id/whatsapp', async (req, res) => {
   } catch (error) { res.status(500).json({ error: 'Failed to prepare WhatsApp message', details: error.message }); }
 });
 
-app.get('/api/customer/bookings/:id/events', async (req, res) => {
+app.get('/api/customer/bookings/:id/events', authenticateCustomer, async (req, res) => {
   try {
-    const phone = normalizePhone(req.query.phone);
-    if (!phone) return res.status(400).json({ error: 'phone is required' });
-    const booking = await bookingsQuery(`WHERE b.id=$1 AND c.phone=$2`, [req.params.id, phone]);
+    const booking = await bookingsQuery(`WHERE b.id=$1 AND b.customer_id=$2`, [req.params.id, req.customer.id]);
     if (!booking.rows[0]) return res.status(404).json({ error: 'Booking not found' });
     const result = await query(`SELECT event_type, title, description, created_at FROM booking_events WHERE booking_id=$1 ORDER BY created_at ASC`, [req.params.id]);
     res.json(result.rows);
   } catch (error) { res.status(500).json({ error: 'Failed to load booking events', details: error.message }); }
 });
 
-app.get('/api/customer/bookings', async (req, res) => {
+app.get('/api/customer/bookings', authenticateCustomer, async (req, res) => {
   try {
-    const phone = normalizePhone(req.query.phone);
-    if (!phone) return res.status(400).json({ error: 'phone is required' });
-    const result = await bookingsQuery(`WHERE c.phone=$1`, [phone]);
+    const result = await bookingsQuery(`WHERE b.customer_id=$1`, [req.customer.id]);
     res.json(result.rows);
   } catch (error) { res.status(500).json({ error: 'Failed to load customer bookings', details: error.message }); }
 });
 
-app.get('/api/customer/bookings/:id', async (req, res) => {
+app.get('/api/customer/bookings/:id', authenticateCustomer, async (req, res) => {
   try {
-    const phone = normalizePhone(req.query.phone);
-    if (!phone) return res.status(400).json({ error: 'phone is required' });
-    const result = await bookingsQuery(`WHERE b.id=$1 AND c.phone=$2`, [req.params.id, phone]);
+    const result = await bookingsQuery(`WHERE b.id=$1 AND b.customer_id=$2`, [req.params.id, req.customer.id]);
     if (!result.rows[0]) return res.status(404).json({ error: 'Booking not found' });
     res.json(result.rows[0]);
   } catch (error) { res.status(500).json({ error: 'Failed to load customer booking', details: error.message }); }
 });
 
+async function deliverWhatsAppOtp(phone, otp) {
+  if (!WHATSAPP_ACCESS_TOKEN || !WHATSAPP_PHONE_NUMBER_ID || !WHATSAPP_OTP_TEMPLATE_NAME) {
+    throw new Error('WhatsApp OTP provider is not configured');
+  }
+  const response = await fetch(`https://graph.facebook.com/${WHATSAPP_API_VERSION}/${WHATSAPP_PHONE_NUMBER_ID}/messages`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${WHATSAPP_ACCESS_TOKEN}` },
+    body: JSON.stringify({
+      messaging_product: 'whatsapp',
+      to: normalizeInternationalPhone(phone),
+      type: 'template',
+      template: {
+        name: WHATSAPP_OTP_TEMPLATE_NAME,
+        language: { code: WHATSAPP_TEMPLATE_LANGUAGE },
+        components: [{ type: 'body', parameters: [{ type: 'text', text: otp }] }]
+      }
+    })
+  });
+  const text = await response.text();
+  let data;
+  try { data = text ? JSON.parse(text) : null; } catch { data = { error: text }; }
+  if (!response.ok) throw new Error(data?.error?.message || data?.error || `WhatsApp provider rejected the request (${response.status})`);
+  return { channel: 'whatsapp' };
+}
 
-async function deliverCustomerOtp(phone, otp) {
-  if (CUSTOMER_OTP_TEST_MODE) return;
+async function deliverSmsOtp(phone, otp) {
   const url = process.env.SMS_API_URL;
   const token = process.env.SMS_API_TOKEN;
   if (!url || !token) throw new Error('SMS provider is not configured');
@@ -2520,10 +2416,24 @@ async function deliverCustomerOtp(phone, otp) {
     body: JSON.stringify({ to: phone, message: `رمز تحقق بيوتي هوم سيرفس: ${otp}`, sender: process.env.SMS_SENDER_ID || 'Beauty' })
   });
   if (!response.ok) throw new Error(`SMS provider rejected the request (${response.status})`);
+  return { channel: 'sms' };
 }
 
-export function buildOtpResponse(otp, exposeOtp = CUSTOMER_OTP_TEST_MODE) {
+async function deliverCustomerOtp(phone, otp) {
+  if (CUSTOMER_OTP_TEST_MODE) return { channel: 'dev' };
+  const wantsWhatsApp = OTP_DELIVERY_CHANNEL === 'whatsapp' || OTP_DELIVERY_CHANNEL === 'auto';
+  const wantsSms = OTP_DELIVERY_CHANNEL === 'sms' || OTP_DELIVERY_CHANNEL === 'auto';
+  if (wantsWhatsApp && WHATSAPP_ACCESS_TOKEN && WHATSAPP_PHONE_NUMBER_ID && WHATSAPP_OTP_TEMPLATE_NAME) {
+    return deliverWhatsAppOtp(phone, otp);
+  }
+  if (OTP_DELIVERY_CHANNEL === 'whatsapp') throw new Error('WhatsApp OTP provider is not configured');
+  if (wantsSms) return deliverSmsOtp(phone, otp);
+  throw new Error('OTP provider is not configured');
+}
+
+export function buildOtpResponse(otp, exposeOtp = CUSTOMER_OTP_TEST_MODE, channel = null) {
   const response = { ok: true, message: 'تم إرسال رمز التحقق.' };
+  if (channel) response.channel = channel;
   if (exposeOtp) response.dev_otp = otp;
   return response;
 }
@@ -2542,14 +2452,14 @@ async function requestCustomerOtp(req, res) {
     }
     const otp = CUSTOMER_OTP_TEST_MODE ? '1234' : String(randomInt(100000, 1000000));
     const otpHash = await bcrypt.hash(otp, 10);
-    await deliverCustomerOtp(phone, otp);
+    const delivery = await deliverCustomerOtp(phone, otp);
     await query(`UPDATE customer_otp_codes SET used_at=NOW() WHERE phone=$1 AND used_at IS NULL`, [phone]);
     await query(`INSERT INTO customer_otp_codes (customer_id, phone, otp_code, purpose, expires_at, requested_ip) VALUES ($1,$2,$3,'login',NOW() + INTERVAL '10 minutes',$4)`, [customer.rows[0].id, phone, otpHash, req.ip]);
-    res.json(buildOtpResponse(otp));
+    res.json(buildOtpResponse(otp, CUSTOMER_OTP_TEST_MODE, delivery?.channel));
   } catch (error) {
     if (validationResponse(error, res)) return;
     const message = CUSTOMER_OTP_TEST_MODE ? error.message : 'Unable to send verification code';
-    res.status(error.message === 'SMS provider is not configured' ? 503 : 500).json({ error: message });
+    res.status(/provider is not configured/i.test(error.message) ? 503 : 500).json({ error: message });
   }
 }
 
@@ -2644,7 +2554,7 @@ app.post('/api/uploads/design-image', async (req, res) => {
   }
 });
 
-app.post('/api/admin/uploads/image', async (req, res) => {
+app.post('/api/admin/uploads/image', requirePermission('manage_beauticians'), async (req, res) => {
   try {
     const { image_data_url, folder } = req.body;
     if (!image_data_url || typeof image_data_url !== 'string') return res.status(400).json({ error: 'image_data_url is required.' });
@@ -2660,19 +2570,19 @@ app.get('/api/admin/artist-availability', async (req, res) => {
   res.json(result.rows);
 });
 
-app.post('/api/admin/artist-availability', async (req, res) => {
+app.post('/api/admin/artist-availability', requirePermission('manage_beauticians'), async (req, res) => {
   const a = req.body;
   if (!a.artist_id || !a.available_date) return res.status(400).json({ error: 'artist_id and available_date are required' });
   const result = await query(`INSERT INTO artist_availability (artist_id, available_date, from_time, to_time, is_available, note) VALUES ($1,$2,$3,$4,$5,$6) RETURNING *`, [a.artist_id, a.available_date, a.from_time || null, a.to_time || null, a.is_available !== false, nullable(a.note)]);
   res.status(201).json(result.rows[0]);
 });
 
-app.delete('/api/admin/artist-availability/:id', async (req, res) => {
+app.delete('/api/admin/artist-availability/:id', requirePermission('manage_beauticians'), async (req, res) => {
   await query(`DELETE FROM artist_availability WHERE id=$1`, [req.params.id]);
   res.json({ ok: true, deleted_id: req.params.id });
 });
 
-app.post('/api/admin/artist-reviews', async (req, res) => {
+app.post('/api/admin/artist-reviews', requirePermission('manage_beauticians'), async (req, res) => {
   const r = req.body;
   if (!r.artist_id || !r.booking_id) return res.status(400).json({ error: 'artist_id and booking_id are required' });
   const scores = [Number(r.punctuality || 0), Number(r.quality || 0), Number(r.customer_handling || 0)].filter(Boolean);

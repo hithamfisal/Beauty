@@ -99,8 +99,8 @@ button:disabled { opacity: .55; cursor: not-allowed; transform: none; }
   border-radius: 42px;
   overflow: hidden;
   background:
-    linear-gradient(90deg, rgba(74,63,53,.68), rgba(74,63,53,.08)),
-    url('https://images.unsplash.com/photo-1516975080664-ed2fc6a32937?q=80&w=1600&auto=format&fit=crop') center/cover;
+    linear-gradient(90deg, rgba(41,41,41,.50), rgba(41,41,41,.18) 50%, rgba(41,41,41,.68)),
+    url('/assets/customer-beauty-hero.png') center/cover;
   box-shadow: var(--shadow);
   position: relative;
   display: grid;
@@ -387,9 +387,9 @@ body {
 }
 .hero {
   background:
-    linear-gradient(90deg, rgba(41,41,41,.64), rgba(41,41,41,.10)),
+    linear-gradient(90deg, rgba(41,41,41,.50), rgba(41,41,41,.18) 50%, rgba(41,41,41,.68)),
     radial-gradient(circle at 18% 18%, rgba(247,221,225,.42), transparent 35%),
-    linear-gradient(135deg, #D4A08A, #F7DDE1 45%, #FFF8F4);
+    url('/assets/customer-beauty-hero.png') center/cover;
 }
 .heroText span, .eyebrow {
   color: var(--rose-gold-strong);

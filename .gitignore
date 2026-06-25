@@ -56,6 +56,10 @@ Thumbs.db
 # Backups / temp
 *.bak
 *.tmp
+*.sql
+backend/backups/
+!backend/database/mysql-schema.sql
+!backend/database/migrations/*.sql
 
 # Android release signing - never commit these
 mobile-app/android/key.properties
