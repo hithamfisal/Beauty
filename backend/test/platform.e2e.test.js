@@ -18,25 +18,27 @@ async function insert(sql, params) {
 }
 
 before(async () => {
-  fixture.region = await insert(`INSERT INTO regions (name_ar,name_en,status) VALUES ($1,$1,'active') RETURNING *`, [`E2E Region ${marker}`]);
-  fixture.otherRegion = await insert(`INSERT INTO regions (name_ar,name_en,status) VALUES ($1,$1,'active') RETURNING *`, [`E2E Other Region ${marker}`]);
-  fixture.city = await insert(`INSERT INTO cities (region_id,name_ar,name_en,status) VALUES ($1,$2,$2,'active') RETURNING *`, [fixture.region.id, `E2E City ${marker}`]);
-  fixture.otherCity = await insert(`INSERT INTO cities (region_id,name_ar,name_en,status) VALUES ($1,$2,$2,'active') RETURNING *`, [fixture.otherRegion.id, `E2E Other City ${marker}`]);
-  fixture.district = await insert(`INSERT INTO districts (city_id,name_ar,name_en,status) VALUES ($1,$2,$2,'active') RETURNING *`, [fixture.city.id, `E2E District ${marker}`]);
-  fixture.otherDistrict = await insert(`INSERT INTO districts (city_id,name_ar,name_en,status) VALUES ($1,$2,$2,'active') RETURNING *`, [fixture.otherCity.id, `E2E Other District ${marker}`]);
-  fixture.category = await insert(`INSERT INTO service_categories (name_ar,name_en,status) VALUES ($1,$1,'active') RETURNING *`, [`E2E Category ${marker}`]);
-  fixture.otherCategory = await insert(`INSERT INTO service_categories (name_ar,name_en,status) VALUES ($1,$1,'active') RETURNING *`, [`E2E Other Category ${marker}`]);
-  fixture.service = await insert(`INSERT INTO services (category_id,name,name_ar,name_en,status) VALUES ($1,$2,$2,$2,'active') RETURNING *`, [fixture.category.id, `E2E Service ${marker}`]);
-  fixture.artist = await insert(`INSERT INTO artists (name,phone,region_id,city_id,main_expertise_category_id,status,availability_status) VALUES ($1,$2,$3,$4,$5,'active','available') RETURNING *`, [`E2E Beautician ${marker}`, `050${String(Date.now()).slice(-7)}`, fixture.region.id, fixture.city.id, fixture.category.id]);
+  fixture.tenant = await insert(`SELECT id FROM tenants WHERE slug='beauty-home-service' LIMIT 1`, []);
+  fixture.region = await insert(`INSERT INTO regions (tenant_id,name_ar,name_en,status) VALUES ($1,$2,$2,'active') RETURNING *`, [fixture.tenant.id, `E2E Region ${marker}`]);
+  fixture.otherRegion = await insert(`INSERT INTO regions (tenant_id,name_ar,name_en,status) VALUES ($1,$2,$2,'active') RETURNING *`, [fixture.tenant.id, `E2E Other Region ${marker}`]);
+  fixture.city = await insert(`INSERT INTO cities (tenant_id,region_id,name_ar,name_en,status) VALUES ($1,$2,$3,$3,'active') RETURNING *`, [fixture.tenant.id, fixture.region.id, `E2E City ${marker}`]);
+  fixture.otherCity = await insert(`INSERT INTO cities (tenant_id,region_id,name_ar,name_en,status) VALUES ($1,$2,$3,$3,'active') RETURNING *`, [fixture.tenant.id, fixture.otherRegion.id, `E2E Other City ${marker}`]);
+  fixture.district = await insert(`INSERT INTO districts (tenant_id,city_id,name_ar,name_en,status) VALUES ($1,$2,$3,$3,'active') RETURNING *`, [fixture.tenant.id, fixture.city.id, `E2E District ${marker}`]);
+  fixture.otherDistrict = await insert(`INSERT INTO districts (tenant_id,city_id,name_ar,name_en,status) VALUES ($1,$2,$3,$3,'active') RETURNING *`, [fixture.tenant.id, fixture.otherCity.id, `E2E Other District ${marker}`]);
+  fixture.category = await insert(`INSERT INTO service_categories (tenant_id,name_ar,name_en,status) VALUES ($1,$2,$2,'active') RETURNING *`, [fixture.tenant.id, `E2E Category ${marker}`]);
+  fixture.otherCategory = await insert(`INSERT INTO service_categories (tenant_id,name_ar,name_en,status) VALUES ($1,$2,$2,'active') RETURNING *`, [fixture.tenant.id, `E2E Other Category ${marker}`]);
+  fixture.service = await insert(`INSERT INTO services (tenant_id,category_id,name,name_ar,name_en,status) VALUES ($1,$2,$3,$3,$3,'active') RETURNING *`, [fixture.tenant.id, fixture.category.id, `E2E Service ${marker}`]);
+  fixture.artist = await insert(`INSERT INTO artists (tenant_id,name,phone,region_id,city_id,main_expertise_category_id,status,availability_status) VALUES ($1,$2,$3,$4,$5,$6,'active','available') RETURNING *`, [fixture.tenant.id, `E2E Beautician ${marker}`, `050${String(Date.now()).slice(-7)}`, fixture.region.id, fixture.city.id, fixture.category.id]);
   fixture.adminEmail = `e2e-${marker}@beauty.local`;
   fixture.adminPassword = 'E2e-Secure-Password!';
-  fixture.admin = await insert(`INSERT INTO admin_users (name,email,password_hash,role,status) VALUES ('E2E Admin',$1,$2,'admin','active') RETURNING *`, [fixture.adminEmail, await bcrypt.hash(fixture.adminPassword, 10)]);
-  fixture.phone = `+9665${String(Date.now()).slice(-8)}`;
+  fixture.admin = await insert(`INSERT INTO admin_users (tenant_id,name,email,password_hash,role,status) VALUES ($1,'E2E Admin',$2,$3,'admin','active') RETURNING *`, [fixture.tenant.id, fixture.adminEmail, await bcrypt.hash(fixture.adminPassword, 10)]);
+  fixture.phone = `05${String(Date.now()).slice(-8)}`;
 });
 
 after(async () => {
   if (fixture.booking?.id) {
     await query(`DELETE FROM booking_status_history WHERE booking_id=$1`, [fixture.booking.id]);
+    await query(`DELETE FROM beautician_reviews WHERE booking_id=$1`, [fixture.booking.id]).catch(() => null);
     await query(`DELETE FROM bookings WHERE id=$1`, [fixture.booking.id]);
   }
   await query(`DELETE FROM customer_otp_codes WHERE phone=$1`, [fixture.phone]).catch(() => null);
@@ -103,6 +105,7 @@ test('booking, status, payment, and assignment flow persists', async () => {
   const assignment = await request(app).patch(`/api/admin/bookings/${fixture.booking.id}/assign-artist`).set(auth).send({ artist_id: fixture.artist.id, force: true }).expect(200);
   assert.equal(assignment.body.assigned_artist_id, fixture.artist.id);
   assert.equal(assignment.body.status, 'beautician_assigned');
+  await request(app).get('/api/admin/backups').set(auth).expect(403);
 });
 
 test('beautician coverage is normalized, validated, and used by matching', async () => {
@@ -138,11 +141,18 @@ test('OTP is hashed, single-use, and never exposed by a production response', as
   const verified = await request(app).post('/api/customer/auth/verify-otp').send({ phone: fixture.phone, otp: '1234' }).expect(200);
   assert.ok(verified.body.token);
   const customerAuth = { Authorization: `Bearer ${verified.body.token}` };
+  await request(app).get('/api/customer/bookings').query({ phone: fixture.phone }).expect(401);
+  const myBookings = await request(app).get('/api/customer/bookings').set(customerAuth).expect(200);
+  assert.ok(myBookings.body.some(row => row.id === fixture.booking.id));
   const wrongAddress = await request(app).post('/api/customer/addresses').set(customerAuth).send({
     region_id: fixture.region.id, city_id: fixture.city.id, district_id: fixture.otherDistrict.id, address: 'Wrong location'
   }).expect(400);
   assert.equal(wrongAddress.body.fields.district_id, 'wrong_parent');
+  await request(app).post('/api/customer/reviews').send({ booking_id: fixture.booking.id, rating: 5 }).expect(401);
+  await query(`UPDATE bookings SET status='completed' WHERE id=$1`, [fixture.booking.id]);
+  const review = await request(app).post('/api/customer/reviews').set(customerAuth).send({ booking_id: fixture.booking.id, rating: 5, review_text: 'Great' }).expect(201);
+  assert.equal(review.body.rating, 5);
   await request(app).get('/api/admin/dashboard').set(customerAuth).expect(401);
   await request(app).post('/api/customer/auth/verify-otp').send({ phone: fixture.phone, otp: '1234' }).expect(400);
-  assert.equal(Object.hasOwn(buildOtpResponse('123456', true), 'dev_otp'), false);
+  assert.equal(Object.hasOwn(buildOtpResponse('123456', false), 'dev_otp'), false);
 });

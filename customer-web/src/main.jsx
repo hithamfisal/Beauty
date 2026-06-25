@@ -18,8 +18,8 @@ localStorage.setItem('beauty_tenant_slug', TENANT_SLUG);
 
 async function api(path, options = {}) {
   const res = await fetch(`${API_BASE}${path.startsWith('/') ? path : `/${path}`}`, {
-    headers: { 'Content-Type': 'application/json', 'x-tenant-slug': TENANT_SLUG, ...(options.headers || {}) },
     ...options,
+    headers: { 'Content-Type': 'application/json', 'x-tenant-slug': TENANT_SLUG, ...(options.headers || {}) },
   });
   const text = await res.text();
   let data = null;
@@ -284,9 +284,11 @@ function App() {
   async function trackBookings(e) {
     e?.preventDefault?.(); setLoading(true); setMessage('');
     try {
-      const normalizedPhone = formatSaudiPhoneInput(trackingPhone);
-      if (!isSaudiPhone(normalizedPhone)) throw new Error('رقم الجوال يجب أن يكون بصيغة 05xxxxxxxx');
-      const r = await api(`/customer/bookings?phone=${encodeURIComponent(normalizedPhone)}`);
+      if (!customerToken) {
+        setTab('account');
+        throw new Error('سجلي الدخول برقم الجوال أولاً لعرض طلباتك بأمان.');
+      }
+      const r = await api('/customer/bookings', { headers: { Authorization: `Bearer ${customerToken}` } });
       setTrackingResults(r || []);
       if (!r?.length) setMessage('لا توجد طلبات لهذا الرقم.');
     } catch (e) { setMessage(`تعذر متابعة الطلبات: ${e.message}`); }
@@ -306,7 +308,7 @@ function App() {
       if (!isSaudiPhone(normalizedPhone)) throw new Error('رقم الجوال يجب أن يكون بصيغة 05xxxxxxxx');
       const r = await api('/customer/auth/request-otp', { method:'POST', body: JSON.stringify({ phone: normalizedPhone, name: authName }) });
       setAuthPhone(normalizedPhone);
-      setMessage(`تم إرسال رمز التحقق. رمز التجربة: ${r.dev_otp || 'تم الإرسال'}`);
+      setMessage(r.dev_otp ? `تم إرسال رمز التحقق. رمز التطوير: ${r.dev_otp}` : 'تم إرسال رمز التحقق عبر واتساب أو SMS.');
     } catch(e) { setMessage(`تعذر إرسال رمز التحقق: ${e.message}`); }
     finally { setLoading(false); }
   }

@@ -1,30 +1,39 @@
-// ignore_for_file: deprecated_member_use, use_build_context_synchronously
+// ignore_for_file: deprecated_member_use, use_build_context_synchronously, curly_braces_in_flow_control_structures
 
 import 'dart:async';
 import 'dart:convert';
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 
-const apiBaseUrl = String.fromEnvironment('API_BASE_URL', defaultValue: 'http://10.0.2.2:4000/api');
-const tenantSlug = String.fromEnvironment('TENANT_SLUG', defaultValue: 'beauty-home-service');
+const apiBaseUrl = String.fromEnvironment('API_BASE_URL',
+    defaultValue: 'http://10.0.2.2:4000/api');
+const tenantSlug =
+    String.fromEnvironment('TENANT_SLUG', defaultValue: 'beauty-home-service');
 const savedAdminTokenKey = 'bhs_admin_mobile_token';
 const savedAdminEmailKey = 'bhs_admin_mobile_email';
 const savedAdminNameKey = 'bhs_admin_mobile_name';
 
 class BhsColors {
-  static const roseGold = Color(0xFFD4A08A);
-  static const roseGoldDeep = Color(0xFFB77D69);
-  static const ivory = Color(0xFFFFF8F4);
-  static const softPink = Color(0xFFF7DDE1);
-  static const creamGold = Color(0xFFF4E6D2);
-  static const charcoal = Color(0xFF292929);
-  static const mocha = Color(0xFFA78678);
-  static const mochaDark = Color(0xFF7E5F54);
-  static const success = Color(0xFF68A97A);
-  static const warning = Color(0xFFE3A047);
-  static const danger = Color(0xFFE07A5F);
-  static const info = Color(0xFF6F8FB8);
+  static const midnight = Color(0xFF080B18);
+  static const midnightSoft = Color(0xFF14182D);
+  static const roseGold = Color(0xFFEC4899);
+  static const roseGoldDeep = Color(0xFF8B5CF6);
+  static const electricBlue = Color(0xFF3B82F6);
+  static const cyanAccent = Color(0xFF22D3EE);
+  static const ivory = Color(0xFF080B18);
+  static const porcelain = Color(0xFF0E1224);
+  static const softPink = Color(0xFF1B2038);
+  static const creamGold = Color(0xFF3B82F6);
+  static const charcoal = Color(0xFFF8FAFC);
+  static const plum = Color(0xFF080B18);
+  static const mocha = Color(0xFFA8B0C5);
+  static const mochaDark = Color(0xFFE2E8F0);
+  static const success = Color(0xFF22C55E);
+  static const warning = Color(0xFFF59E0B);
+  static const danger = Color(0xFFEF4444);
+  static const info = Color(0xFF22D3EE);
 }
 
 void main() => runApp(const BeautyAdminMobileApp());
@@ -35,12 +44,13 @@ class BeautyAdminMobileApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = ColorScheme.fromSeed(
-      seedColor: BhsColors.roseGoldDeep,
-      brightness: Brightness.light,
-      primary: BhsColors.roseGoldDeep,
-      secondary: BhsColors.creamGold,
+      seedColor: BhsColors.roseGold,
+      brightness: Brightness.dark,
+      primary: BhsColors.roseGold,
+      secondary: BhsColors.roseGoldDeep,
+      tertiary: BhsColors.electricBlue,
       background: BhsColors.ivory,
-      surface: Colors.white,
+      surface: BhsColors.midnightSoft,
     );
     return MaterialApp(
       debugShowCheckedModeBanner: false,
@@ -48,9 +58,9 @@ class BeautyAdminMobileApp extends StatelessWidget {
       theme: ThemeData(
         fontFamily: 'Tajawal',
         colorScheme: scheme,
-        scaffoldBackgroundColor: BhsColors.ivory,
+        scaffoldBackgroundColor: BhsColors.porcelain,
         useMaterial3: true,
-        brightness: Brightness.light,
+        brightness: Brightness.dark,
         fontFamilyFallback: const ['Cairo', 'Tajawal', 'Almarai', 'Arial'],
         visualDensity: VisualDensity.adaptivePlatformDensity,
         pageTransitionsTheme: const PageTransitionsTheme(builders: {
@@ -58,55 +68,96 @@ class BeautyAdminMobileApp extends StatelessWidget {
           TargetPlatform.iOS: CupertinoPageTransitionsBuilder(),
         }),
         appBarTheme: const AppBarTheme(
-          backgroundColor: BhsColors.ivory,
+          backgroundColor: BhsColors.porcelain,
           surfaceTintColor: Colors.transparent,
           foregroundColor: BhsColors.charcoal,
           centerTitle: true,
           elevation: 0,
-          titleTextStyle: TextStyle(fontSize: 18, fontWeight: FontWeight.w900, color: BhsColors.charcoal),
+          titleTextStyle: TextStyle(
+              fontSize: 18,
+              fontWeight: FontWeight.w900,
+              color: BhsColors.charcoal),
         ),
         filledButtonTheme: FilledButtonThemeData(
           style: FilledButton.styleFrom(
             backgroundColor: BhsColors.roseGoldDeep,
             foregroundColor: Colors.white,
+            elevation: 0,
             padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 18),
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(999)),
+            minimumSize: const Size(54, 48),
+            shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(999)),
             textStyle: const TextStyle(fontWeight: FontWeight.w900),
           ),
         ),
         outlinedButtonTheme: OutlinedButtonThemeData(
           style: OutlinedButton.styleFrom(
             foregroundColor: BhsColors.mochaDark,
-            side: const BorderSide(color: BhsColors.creamGold),
+            side: const BorderSide(color: BhsColors.roseGold),
             padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 18),
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(999)),
+            minimumSize: const Size(54, 48),
+            shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(999)),
             textStyle: const TextStyle(fontWeight: FontWeight.w900),
           ),
         ),
         dialogTheme: DialogThemeData(
           backgroundColor: Colors.white,
           surfaceTintColor: Colors.transparent,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(26)),
+          shape:
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(26)),
         ),
         bottomNavigationBarTheme: const BottomNavigationBarThemeData(
-          backgroundColor: Colors.white,
+          backgroundColor: BhsColors.midnightSoft,
           selectedItemColor: BhsColors.roseGoldDeep,
           unselectedItemColor: BhsColors.mocha,
           type: BottomNavigationBarType.fixed,
           selectedLabelStyle: TextStyle(fontWeight: FontWeight.w900),
           unselectedLabelStyle: TextStyle(fontWeight: FontWeight.w700),
         ),
+        navigationBarTheme: NavigationBarThemeData(
+          height: 74,
+          elevation: 0,
+          backgroundColor: BhsColors.midnightSoft,
+          indicatorColor: BhsColors.softPink,
+          indicatorShape:
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+          labelBehavior: NavigationDestinationLabelBehavior.alwaysShow,
+        ),
+        listTileTheme: const ListTileThemeData(
+          contentPadding: EdgeInsets.symmetric(horizontal: 4, vertical: 4),
+          iconColor: BhsColors.roseGoldDeep,
+          textColor: BhsColors.charcoal,
+        ),
+        snackBarTheme: SnackBarThemeData(
+          behavior: SnackBarBehavior.floating,
+          backgroundColor: BhsColors.plum,
+          contentTextStyle:
+              const TextStyle(color: Colors.white, fontWeight: FontWeight.w700),
+          shape:
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+        ),
         inputDecorationTheme: InputDecorationTheme(
           filled: true,
-          fillColor: Colors.white,
-          contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-          border: OutlineInputBorder(borderRadius: BorderRadius.circular(16), borderSide: const BorderSide(color: BhsColors.roseGold)),
-          enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(16), borderSide: BorderSide(color: BhsColors.roseGold.withOpacity(.65))),
-          focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(16), borderSide: const BorderSide(color: BhsColors.roseGoldDeep, width: 1.5)),
+          fillColor: BhsColors.midnightSoft.withOpacity(.96),
+          contentPadding:
+              const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+          border: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(18),
+              borderSide: const BorderSide(color: BhsColors.roseGold)),
+          enabledBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(18),
+              borderSide:
+                  BorderSide(color: BhsColors.roseGold.withOpacity(.52))),
+          focusedBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(18),
+              borderSide:
+                  const BorderSide(color: BhsColors.roseGoldDeep, width: 1.5)),
           labelStyle: const TextStyle(color: BhsColors.mochaDark),
         ),
       ),
-      builder: (context, child) => Directionality(textDirection: TextDirection.rtl, child: child ?? const SizedBox()),
+      builder: (context, child) => Directionality(
+          textDirection: TextDirection.rtl, child: child ?? const SizedBox()),
       home: const AdminGate(),
     );
   }
@@ -114,7 +165,9 @@ class BeautyAdminMobileApp extends StatelessWidget {
 
 class ApiClient {
   static Uri uri(String path) {
-    final base = apiBaseUrl.endsWith('/') ? apiBaseUrl.substring(0, apiBaseUrl.length - 1) : apiBaseUrl;
+    final base = apiBaseUrl.endsWith('/')
+        ? apiBaseUrl.substring(0, apiBaseUrl.length - 1)
+        : apiBaseUrl;
     final cleanPath = path.startsWith('/') ? path : '/$path';
     return Uri.parse('$base$cleanPath');
   }
@@ -130,31 +183,46 @@ class ApiClient {
   static const Duration requestTimeout = Duration(seconds: 18);
   static const Duration cacheTtl = Duration(seconds: 90);
 
-  static String _cacheKey(String path, String? token) => '${token == null || token.isEmpty ? 'public' : 'auth'}::$path';
+  static String _cacheKey(String path, String? token) =>
+      '${token == null || token.isEmpty ? 'public' : 'auth'}::$path';
 
-  static Future<dynamic> get(String path, {String? token, bool forceRefresh = false}) async {
+  static Future<dynamic> get(String path,
+      {String? token, bool forceRefresh = false}) async {
     final key = _cacheKey(path, token);
     final cached = _cache[key];
-    if (!forceRefresh && cached != null && DateTime.now().difference(cached.createdAt) < cacheTtl) return cached.data;
-    final data = _parse(await _client.get(uri(path), headers: headers(token)).timeout(requestTimeout));
+    if (!forceRefresh &&
+        cached != null &&
+        DateTime.now().difference(cached.createdAt) < cacheTtl)
+      return cached.data;
+    final data = _parse(await _client
+        .get(uri(path), headers: headers(token))
+        .timeout(requestTimeout));
     _cache[key] = _CacheEntry(data);
     return data;
   }
 
-  static Future<dynamic> post(String path, Map<String, dynamic> body, {String? token}) async {
-    final data = _parse(await _client.post(uri(path), headers: headers(token), body: jsonEncode(body)).timeout(requestTimeout));
+  static Future<dynamic> post(String path, Map<String, dynamic> body,
+      {String? token}) async {
+    final data = _parse(await _client
+        .post(uri(path), headers: headers(token), body: jsonEncode(body))
+        .timeout(requestTimeout));
     clearCache();
     return data;
   }
 
-  static Future<dynamic> patch(String path, Map<String, dynamic> body, {String? token}) async {
-    final data = _parse(await _client.patch(uri(path), headers: headers(token), body: jsonEncode(body)).timeout(requestTimeout));
+  static Future<dynamic> patch(String path, Map<String, dynamic> body,
+      {String? token}) async {
+    final data = _parse(await _client
+        .patch(uri(path), headers: headers(token), body: jsonEncode(body))
+        .timeout(requestTimeout));
     clearCache();
     return data;
   }
 
   static Future<dynamic> delete(String path, {String? token}) async {
-    final data = _parse(await _client.delete(uri(path), headers: headers(token)).timeout(requestTimeout));
+    final data = _parse(await _client
+        .delete(uri(path), headers: headers(token))
+        .timeout(requestTimeout));
     clearCache();
     return data;
   }
@@ -167,11 +235,15 @@ class ApiClient {
     try {
       data = text.isEmpty ? null : jsonDecode(text);
     } catch (_) {
-      final shortText = text.length > 180 ? '${text.substring(0, 180)}...' : text;
-      throw Exception('استجابة غير صالحة من السيرفر (${response.statusCode}): $shortText');
+      final shortText =
+          text.length > 180 ? '${text.substring(0, 180)}...' : text;
+      throw Exception(
+          'استجابة غير صالحة من السيرفر (${response.statusCode}): $shortText');
     }
     if (response.statusCode < 200 || response.statusCode >= 300) {
-      final message = data is Map ? (data['error'] ?? data['details'] ?? 'حدث خطأ') : 'حدث خطأ';
+      final message = data is Map
+          ? (data['error'] ?? data['details'] ?? 'حدث خطأ')
+          : 'حدث خطأ';
       throw Exception(message);
     }
     return data;
@@ -192,7 +264,8 @@ String txt(dynamic v, [String fallback = '-']) {
 String dateOnly(dynamic v) {
   final s = txt(v, '');
   if (s.isEmpty) return '-';
-  return DateTime.tryParse(s)?.toString().substring(0, 10) ?? (s.length >= 10 ? s.substring(0, 10) : s);
+  return DateTime.tryParse(s)?.toString().substring(0, 10) ??
+      (s.length >= 10 ? s.substring(0, 10) : s);
 }
 
 String timeOnly(dynamic v) {
@@ -265,24 +338,42 @@ Color statusColor(String status) {
 }
 
 void showToast(BuildContext context, String message) {
-  ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message), behavior: SnackBarBehavior.floating));
+  ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(message), behavior: SnackBarBehavior.floating));
 }
 
 class LuxuryCard extends StatelessWidget {
   final Widget child;
   final EdgeInsetsGeometry padding;
   final EdgeInsetsGeometry margin;
-  const LuxuryCard({super.key, required this.child, this.padding = const EdgeInsets.all(16), this.margin = const EdgeInsets.only(bottom: 14)});
+  const LuxuryCard(
+      {super.key,
+      required this.child,
+      this.padding = const EdgeInsets.all(16),
+      this.margin = const EdgeInsets.only(bottom: 14)});
 
   @override
   Widget build(BuildContext context) => Container(
         margin: margin,
         padding: padding,
+        clipBehavior: Clip.antiAlias,
         decoration: BoxDecoration(
-          color: Colors.white.withOpacity(.96),
-          borderRadius: BorderRadius.circular(24),
-          border: Border.all(color: BhsColors.roseGold.withOpacity(.38)),
-          boxShadow: [BoxShadow(color: BhsColors.roseGold.withOpacity(.16), blurRadius: 18, offset: const Offset(0, 8))],
+          gradient: LinearGradient(
+            colors: [
+              BhsColors.midnightSoft.withOpacity(.98),
+              BhsColors.porcelain.withOpacity(.94)
+            ],
+            begin: Alignment.topRight,
+            end: Alignment.bottomLeft,
+          ),
+          borderRadius: BorderRadius.circular(26),
+          border: Border.all(color: Colors.white.withOpacity(.10)),
+          boxShadow: [
+            BoxShadow(
+                color: Colors.black.withOpacity(.28),
+                blurRadius: 28,
+                offset: const Offset(0, 16)),
+          ],
         ),
         child: child,
       );
@@ -297,9 +388,14 @@ class StatusPill extends StatelessWidget {
   Widget build(BuildContext context) {
     final color = statusColor(status);
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-      decoration: BoxDecoration(color: color.withOpacity(.13), borderRadius: BorderRadius.circular(999), border: Border.all(color: color.withOpacity(.28))),
-      child: Text(label, style: TextStyle(color: color, fontWeight: FontWeight.w900, fontSize: 12)),
+      padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 7),
+      decoration: BoxDecoration(
+          color: color.withOpacity(.14),
+          borderRadius: BorderRadius.circular(999),
+          border: Border.all(color: color.withOpacity(.30))),
+      child: Text(label,
+          style: TextStyle(
+              color: color, fontWeight: FontWeight.w900, fontSize: 12)),
     );
   }
 }
@@ -332,7 +428,9 @@ class _AdminGateState extends State<AdminGate> {
   @override
   Widget build(BuildContext context) {
     if (loading) return const SplashLoading();
-    return token == null || token!.isEmpty ? const AdminLoginScreen() : AdminShell(token: token!);
+    return token == null || token!.isEmpty
+        ? const AdminLoginScreen()
+        : AdminShell(token: token!);
   }
 }
 
@@ -347,9 +445,14 @@ class SplashLoading extends StatelessWidget {
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: const [
-                Icon(Icons.admin_panel_settings_outlined, color: BhsColors.roseGoldDeep, size: 48),
+                Icon(Icons.admin_panel_settings_outlined,
+                    color: BhsColors.roseGoldDeep, size: 48),
                 SizedBox(height: 12),
-                Text('إدارة بيوتي', style: TextStyle(fontSize: 22, fontWeight: FontWeight.w900, color: BhsColors.charcoal)),
+                Text('إدارة بيوتي',
+                    style: TextStyle(
+                        fontSize: 22,
+                        fontWeight: FontWeight.w900,
+                        color: BhsColors.charcoal)),
                 SizedBox(height: 12),
                 CircularProgressIndicator(),
               ],
@@ -377,14 +480,17 @@ class _AdminLoginScreenState extends State<AdminLoginScreen> {
     if (!formKey.currentState!.validate()) return;
     setState(() => loading = true);
     try {
-      final data = mapOf(await ApiClient.post('/admin/login', {'email': email.text.trim(), 'password': password.text.trim()}));
+      final data = mapOf(await ApiClient.post('/admin/login',
+          {'email': email.text.trim(), 'password': password.text.trim()}));
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString(savedAdminTokenKey, txt(data['token'], ''));
       final user = mapOf(data['user']);
-      await prefs.setString(savedAdminEmailKey, txt(user['email'], email.text.trim()));
+      await prefs.setString(
+          savedAdminEmailKey, txt(user['email'], email.text.trim()));
       await prefs.setString(savedAdminNameKey, txt(user['name'], 'Admin'));
       if (!mounted) return;
-      Navigator.of(context).pushReplacement(MaterialPageRoute(builder: (_) => AdminShell(token: txt(data['token'], ''))));
+      Navigator.of(context).pushReplacement(MaterialPageRoute(
+          builder: (_) => AdminShell(token: txt(data['token'], ''))));
     } catch (e) {
       showToast(context, 'فشل تسجيل الدخول: $e');
     } finally {
@@ -403,13 +509,24 @@ class _AdminLoginScreenState extends State<AdminLoginScreen> {
                   Container(
                     width: 82,
                     height: 82,
-                    decoration: const BoxDecoration(shape: BoxShape.circle, gradient: LinearGradient(colors: [BhsColors.roseGold, BhsColors.creamGold])),
-                    child: const Icon(Icons.admin_panel_settings_outlined, color: Colors.white, size: 42),
+                    decoration: const BoxDecoration(
+                        shape: BoxShape.circle,
+                        gradient: LinearGradient(
+                            colors: [BhsColors.roseGold, BhsColors.creamGold])),
+                    child: const Icon(Icons.admin_panel_settings_outlined,
+                        color: Colors.white, size: 42),
                   ),
                   const SizedBox(height: 16),
-                  const Text('تطبيق مدير النظام', style: TextStyle(fontSize: 26, fontWeight: FontWeight.w900, color: BhsColors.charcoal)),
+                  const Text('تطبيق مدير النظام',
+                      style: TextStyle(
+                          fontSize: 26,
+                          fontWeight: FontWeight.w900,
+                          color: BhsColors.charcoal)),
                   const SizedBox(height: 6),
-                  const Text('تطبيق مدير نظام بيوتي هوم سيرفس', style: TextStyle(color: BhsColors.mochaDark, fontWeight: FontWeight.w700)),
+                  const Text('تطبيق مدير نظام بيوتي هوم سيرفس',
+                      style: TextStyle(
+                          color: BhsColors.mochaDark,
+                          fontWeight: FontWeight.w700)),
                   const SizedBox(height: 22),
                   LuxuryCard(
                     margin: EdgeInsets.zero,
@@ -421,8 +538,12 @@ class _AdminLoginScreenState extends State<AdminLoginScreen> {
                           TextFormField(
                             controller: email,
                             keyboardType: TextInputType.emailAddress,
-                            decoration: const InputDecoration(labelText: 'بريد المدير', prefixIcon: Icon(Icons.email_outlined)),
-                            validator: (v) => txt(v, '').contains('@') ? null : 'أدخل بريد المدير',
+                            decoration: const InputDecoration(
+                                labelText: 'بريد المدير',
+                                prefixIcon: Icon(Icons.email_outlined)),
+                            validator: (v) => txt(v, '').contains('@')
+                                ? null
+                                : 'أدخل بريد المدير',
                           ),
                           const SizedBox(height: 12),
                           TextFormField(
@@ -431,18 +552,34 @@ class _AdminLoginScreenState extends State<AdminLoginScreen> {
                             decoration: InputDecoration(
                               labelText: 'كلمة المرور',
                               prefixIcon: const Icon(Icons.lock_outline),
-                              suffixIcon: IconButton(onPressed: () => setState(() => obscure = !obscure), icon: Icon(obscure ? Icons.visibility_outlined : Icons.visibility_off_outlined)),
+                              suffixIcon: IconButton(
+                                  onPressed: () =>
+                                      setState(() => obscure = !obscure),
+                                  icon: Icon(obscure
+                                      ? Icons.visibility_outlined
+                                      : Icons.visibility_off_outlined)),
                             ),
-                            validator: (v) => txt(v, '').length >= 4 ? null : 'أدخل كلمة المرور',
+                            validator: (v) => txt(v, '').length >= 4
+                                ? null
+                                : 'أدخل كلمة المرور',
                           ),
                           const SizedBox(height: 16),
                           FilledButton.icon(
                             onPressed: loading ? null : login,
-                            icon: loading ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white)) : const Icon(Icons.login),
+                            icon: loading
+                                ? const SizedBox(
+                                    width: 18,
+                                    height: 18,
+                                    child: CircularProgressIndicator(
+                                        strokeWidth: 2, color: Colors.white))
+                                : const Icon(Icons.login),
                             label: const Text('دخول مدير النظام'),
                           ),
                           const SizedBox(height: 12),
-                          Text('API: $apiBaseUrl', textAlign: TextAlign.center, style: const TextStyle(fontSize: 11, color: BhsColors.mocha)),
+                          Text('API: $apiBaseUrl',
+                              textAlign: TextAlign.center,
+                              style: const TextStyle(
+                                  fontSize: 11, color: BhsColors.mocha)),
                         ],
                       ),
                     ),
@@ -472,7 +609,9 @@ class _AdminShellState extends State<AdminShell> {
     await prefs.remove(savedAdminEmailKey);
     await prefs.remove(savedAdminNameKey);
     if (!mounted) return;
-    Navigator.of(context).pushAndRemoveUntil(MaterialPageRoute(builder: (_) => const AdminLoginScreen()), (_) => false);
+    Navigator.of(context).pushAndRemoveUntil(
+        MaterialPageRoute(builder: (_) => const AdminLoginScreen()),
+        (_) => false);
   }
 
   @override
@@ -486,21 +625,49 @@ class _AdminShellState extends State<AdminShell> {
     ];
     return Scaffold(
       appBar: AppBar(
-        title: Text(['نظرة عامة', 'الحجوزات', 'الخدمات والمناطق', 'الخبيرات', 'النظام'][index]),
-        actions: [IconButton(onPressed: logout, tooltip: 'خروج', icon: const Icon(Icons.logout))],
+        title: Text([
+          'نظرة عامة',
+          'الحجوزات',
+          'الخدمات والمناطق',
+          'الخبيرات',
+          'النظام'
+        ][index]),
+        actions: [
+          IconButton(
+              onPressed: logout,
+              tooltip: 'خروج',
+              icon: const Icon(Icons.logout))
+        ],
       ),
       body: pages[index],
       bottomNavigationBar: NavigationBar(
-        backgroundColor: Colors.white,
+        height: 76,
+        elevation: 0,
+        backgroundColor: Colors.white.withOpacity(.98),
         indicatorColor: BhsColors.softPink,
         selectedIndex: index,
         onDestinationSelected: (i) => setState(() => index = i),
         destinations: const [
-          NavigationDestination(icon: Icon(Icons.dashboard_outlined), selectedIcon: Icon(Icons.dashboard), label: 'الرئيسية'),
-          NavigationDestination(icon: Icon(Icons.event_note_outlined), selectedIcon: Icon(Icons.event_note), label: 'الحجوزات'),
-          NavigationDestination(icon: Icon(Icons.spa_outlined), selectedIcon: Icon(Icons.spa), label: 'الخدمات'),
-          NavigationDestination(icon: Icon(Icons.groups_outlined), selectedIcon: Icon(Icons.groups), label: 'الخبيرات'),
-          NavigationDestination(icon: Icon(Icons.settings_outlined), selectedIcon: Icon(Icons.settings), label: 'النظام'),
+          NavigationDestination(
+              icon: Icon(Icons.dashboard_outlined),
+              selectedIcon: Icon(Icons.dashboard),
+              label: 'الرئيسية'),
+          NavigationDestination(
+              icon: Icon(Icons.event_note_outlined),
+              selectedIcon: Icon(Icons.event_note),
+              label: 'الحجوزات'),
+          NavigationDestination(
+              icon: Icon(Icons.spa_outlined),
+              selectedIcon: Icon(Icons.spa),
+              label: 'الخدمات'),
+          NavigationDestination(
+              icon: Icon(Icons.groups_outlined),
+              selectedIcon: Icon(Icons.groups),
+              label: 'الخبيرات'),
+          NavigationDestination(
+              icon: Icon(Icons.settings_outlined),
+              selectedIcon: Icon(Icons.settings),
+              label: 'النظام'),
         ],
       ),
     );
@@ -528,11 +695,19 @@ class _OverviewScreenState extends State<OverviewScreen> {
   }
 
   Future<void> load() async {
-    setState(() { loading = true; error = null; });
+    setState(() {
+      loading = true;
+      error = null;
+    });
     try {
-      final d = mapOf(await ApiClient.get('/admin/dashboard', token: widget.token, forceRefresh: true));
-      final b = listOf(await ApiClient.get('/admin/bookings?limit=6', token: widget.token, forceRefresh: true));
-      setState(() { dashboard = d; bookings = b.take(6).toList(); });
+      final d = mapOf(await ApiClient.get('/admin/dashboard',
+          token: widget.token, forceRefresh: true));
+      final b = listOf(await ApiClient.get('/admin/bookings?limit=6',
+          token: widget.token, forceRefresh: true));
+      setState(() {
+        dashboard = d;
+        bookings = b.take(6).toList();
+      });
     } catch (e) {
       setState(() => error = e.toString());
     } finally {
@@ -549,7 +724,8 @@ class _OverviewScreenState extends State<OverviewScreen> {
                 padding: const EdgeInsets.all(16),
                 children: [
                   if (error != null) ErrorCard(message: error!, onRetry: load),
-                  HeroAdminCard(name: txt(dashboard['admin_name'], 'مدير النظام')),
+                  HeroAdminCard(
+                      name: txt(dashboard['admin_name'], 'مدير النظام')),
                   GridView.count(
                     shrinkWrap: true,
                     physics: const NeverScrollableScrollPhysics(),
@@ -558,21 +734,48 @@ class _OverviewScreenState extends State<OverviewScreen> {
                     crossAxisSpacing: 12,
                     childAspectRatio: 1.25,
                     children: [
-                      KpiCard(title: 'كل الحجوزات', value: txt(dashboard['total_bookings'], '0'), icon: Icons.event_note_outlined),
-                      KpiCard(title: 'طلبات جديدة', value: txt(dashboard['new_bookings'], '0'), icon: Icons.fiber_new_outlined),
-                      KpiCard(title: 'طلبات اليوم', value: txt(dashboard['today_bookings'], '0'), icon: Icons.today_outlined),
-                      KpiCard(title: 'بدون خبيرة', value: txt(dashboard['unassigned_bookings'], '0'), icon: Icons.person_search_outlined),
-                      KpiCard(title: 'غير مدفوعة', value: txt(dashboard['unpaid_bookings'], '0'), icon: Icons.payments_outlined),
-                      KpiCard(title: 'خبيرات فعالات', value: txt(dashboard['active_artists'] ?? dashboard['active_beauticians'], '0'), icon: Icons.groups_outlined),
+                      KpiCard(
+                          title: 'كل الحجوزات',
+                          value: txt(dashboard['total_bookings'], '0'),
+                          icon: Icons.event_note_outlined),
+                      KpiCard(
+                          title: 'طلبات جديدة',
+                          value: txt(dashboard['new_bookings'], '0'),
+                          icon: Icons.fiber_new_outlined),
+                      KpiCard(
+                          title: 'طلبات اليوم',
+                          value: txt(dashboard['today_bookings'], '0'),
+                          icon: Icons.today_outlined),
+                      KpiCard(
+                          title: 'بدون خبيرة',
+                          value: txt(dashboard['unassigned_bookings'], '0'),
+                          icon: Icons.person_search_outlined),
+                      KpiCard(
+                          title: 'غير مدفوعة',
+                          value: txt(dashboard['unpaid_bookings'], '0'),
+                          icon: Icons.payments_outlined),
+                      KpiCard(
+                          title: 'خبيرات فعالات',
+                          value: txt(
+                              dashboard['active_artists'] ??
+                                  dashboard['active_beauticians'],
+                              '0'),
+                          icon: Icons.groups_outlined),
                     ],
                   ),
                   const SizedBox(height: 14),
                   LuxuryCard(
-                    child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                      const SectionTitle('طلبات تحتاج متابعة'),
-                      if (bookings.isEmpty) const EmptyState('لا توجد حجوزات حالياً'),
-                      ...bookings.map((b) => BookingMiniTile(booking: mapOf(b), token: widget.token, onChanged: load)),
-                    ]),
+                    child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const SectionTitle('طلبات تحتاج متابعة'),
+                          if (bookings.isEmpty)
+                            const EmptyState('لا توجد حجوزات حالياً'),
+                          ...bookings.map((b) => BookingMiniTile(
+                              booking: mapOf(b),
+                              token: widget.token,
+                              onChanged: load)),
+                        ]),
                   ),
                 ],
               ),
@@ -587,26 +790,48 @@ class HeroAdminCard extends StatelessWidget {
   Widget build(BuildContext context) => Container(
         margin: const EdgeInsets.only(bottom: 16),
         padding: const EdgeInsets.all(20),
+        clipBehavior: Clip.antiAlias,
         decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(28),
-          gradient: const LinearGradient(colors: [BhsColors.roseGoldDeep, BhsColors.creamGold]),
-          boxShadow: [BoxShadow(color: BhsColors.roseGoldDeep.withOpacity(.25), blurRadius: 22, offset: const Offset(0, 12))],
+          borderRadius: BorderRadius.circular(30),
+          gradient: const LinearGradient(colors: [
+            BhsColors.plum,
+            BhsColors.roseGoldDeep,
+            BhsColors.creamGold
+          ], begin: Alignment.topRight, end: Alignment.bottomLeft),
+          border: Border.all(color: Colors.white.withOpacity(.55)),
+          boxShadow: [
+            BoxShadow(
+                color: BhsColors.roseGoldDeep.withOpacity(.24),
+                blurRadius: 30,
+                offset: const Offset(0, 14))
+          ],
         ),
         child: Row(
           children: [
             Container(
               width: 58,
               height: 58,
-              decoration: BoxDecoration(color: Colors.white.withOpacity(.24), shape: BoxShape.circle),
-              child: const Icon(Icons.admin_panel_settings_outlined, color: Colors.white, size: 32),
+              decoration: BoxDecoration(
+                  color: Colors.white.withOpacity(.24), shape: BoxShape.circle),
+              child: const Icon(Icons.admin_panel_settings_outlined,
+                  color: Colors.white, size: 32),
             ),
             const SizedBox(width: 14),
             Expanded(
-              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                Text('مرحباً، $name', style: const TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.w900)),
-                const SizedBox(height: 4),
-                Text('متابعة الحجوزات والتشغيل من الجوال', style: TextStyle(color: Colors.white.withOpacity(.86), fontWeight: FontWeight.w700)),
-              ]),
+              child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text('مرحباً، $name',
+                        style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 20,
+                            fontWeight: FontWeight.w900)),
+                    const SizedBox(height: 4),
+                    Text('متابعة الحجوزات والتشغيل من الجوال',
+                        style: TextStyle(
+                            color: Colors.white.withOpacity(.86),
+                            fontWeight: FontWeight.w700)),
+                  ]),
             ),
           ],
         ),
@@ -617,27 +842,51 @@ class KpiCard extends StatelessWidget {
   final String title;
   final String value;
   final IconData icon;
-  const KpiCard({super.key, required this.title, required this.value, required this.icon});
+  const KpiCard(
+      {super.key,
+      required this.title,
+      required this.value,
+      required this.icon});
 
   @override
   Widget build(BuildContext context) => Container(
         padding: const EdgeInsets.all(14),
+        clipBehavior: Clip.antiAlias,
         decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(22),
-          border: Border.all(color: BhsColors.roseGold.withOpacity(.34)),
-          boxShadow: [BoxShadow(color: BhsColors.roseGold.withOpacity(.12), blurRadius: 14, offset: const Offset(0, 7))],
+          gradient: LinearGradient(colors: [
+            BhsColors.midnightSoft.withOpacity(.98),
+            BhsColors.softPink.withOpacity(.72)
+          ], begin: Alignment.topRight, end: Alignment.bottomLeft),
+          borderRadius: BorderRadius.circular(24),
+          border: Border.all(color: Colors.white.withOpacity(.10)),
+          boxShadow: [
+            BoxShadow(
+                color: Colors.black.withOpacity(.22),
+                blurRadius: 18,
+                offset: const Offset(0, 9))
+          ],
         ),
-        child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
-          Container(
-            width: 38,
-            height: 38,
-            decoration: const BoxDecoration(color: BhsColors.softPink, shape: BoxShape.circle),
-            child: Icon(icon, color: BhsColors.roseGoldDeep, size: 21),
-          ),
-          Text(value, style: const TextStyle(color: BhsColors.charcoal, fontSize: 24, fontWeight: FontWeight.w900)),
-          Text(title, style: const TextStyle(color: BhsColors.mochaDark, fontWeight: FontWeight.w800)),
-        ]),
+        child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Container(
+                width: 38,
+                height: 38,
+                decoration: BoxDecoration(
+                    color: BhsColors.softPink.withOpacity(.84),
+                    borderRadius: BorderRadius.circular(15)),
+                child: Icon(icon, color: BhsColors.roseGoldDeep, size: 21),
+              ),
+              Text(value,
+                  style: const TextStyle(
+                      color: BhsColors.charcoal,
+                      fontSize: 24,
+                      fontWeight: FontWeight.w900)),
+              Text(title,
+                  style: const TextStyle(
+                      color: BhsColors.mochaDark, fontWeight: FontWeight.w800)),
+            ]),
       );
 }
 
@@ -663,9 +912,13 @@ class _BookingsScreenState extends State<BookingsScreen> {
   }
 
   Future<void> load() async {
-    setState(() { loading = true; error = null; });
+    setState(() {
+      loading = true;
+      error = null;
+    });
     try {
-      final b = listOf(await ApiClient.get('/admin/bookings?limit=120', token: widget.token, forceRefresh: true));
+      final b = listOf(await ApiClient.get('/admin/bookings?limit=120',
+          token: widget.token, forceRefresh: true));
       setState(() => all = b);
     } catch (e) {
       setState(() => error = e.toString());
@@ -677,8 +930,11 @@ class _BookingsScreenState extends State<BookingsScreen> {
   List get filtered => all.where((raw) {
         final b = mapOf(raw);
         final s = txt(b['status'], 'new');
-        final hay = '${b['booking_number']} ${b['customer_name']} ${b['customer_phone']} ${b['service_name']} ${b['city_name']}'.toLowerCase();
-        return (status == 'all' || s == status) && hay.contains(query.toLowerCase());
+        final hay =
+            '${b['booking_number']} ${b['customer_name']} ${b['customer_phone']} ${b['service_name']} ${b['city_name']}'
+                .toLowerCase();
+        return (status == 'all' || s == status) &&
+            hay.contains(query.toLowerCase());
       }).toList();
 
   @override
@@ -689,18 +945,25 @@ class _BookingsScreenState extends State<BookingsScreen> {
             child: Column(children: [
               TextField(
                 onChanged: (v) => setState(() => query = v),
-                decoration: const InputDecoration(labelText: 'بحث برقم الحجز / العميلة / الخدمة', prefixIcon: Icon(Icons.search)),
+                decoration: const InputDecoration(
+                    labelText: 'بحث برقم الحجز / العميلة / الخدمة',
+                    prefixIcon: Icon(Icons.search)),
               ),
               const SizedBox(height: 10),
               DropdownButtonFormField<String>(
                 value: status,
-                decoration: const InputDecoration(labelText: 'الحالة', prefixIcon: Icon(Icons.tune)),
+                decoration: const InputDecoration(
+                    labelText: 'الحالة', prefixIcon: Icon(Icons.tune)),
                 items: const [
                   DropdownMenuItem(value: 'all', child: Text('كل الحالات')),
                   DropdownMenuItem(value: 'new', child: Text('طلب جديد')),
-                  DropdownMenuItem(value: 'under_review', child: Text('قيد المراجعة')),
-                  DropdownMenuItem(value: 'confirmed', child: Text('تم التأكيد')),
-                  DropdownMenuItem(value: 'beautician_assigned', child: Text('تم تعيين خبيرة')),
+                  DropdownMenuItem(
+                      value: 'under_review', child: Text('قيد المراجعة')),
+                  DropdownMenuItem(
+                      value: 'confirmed', child: Text('تم التأكيد')),
+                  DropdownMenuItem(
+                      value: 'beautician_assigned',
+                      child: Text('تم تعيين خبيرة')),
                   DropdownMenuItem(value: 'completed', child: Text('مكتمل')),
                   DropdownMenuItem(value: 'cancelled', child: Text('ملغي')),
                 ],
@@ -717,9 +980,18 @@ class _BookingsScreenState extends State<BookingsScreen> {
                       padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
                       itemCount: filtered.length + 2,
                       itemBuilder: (context, i) {
-                        if (i == 0) return error != null ? ErrorCard(message: error!, onRetry: load) : const SizedBox.shrink();
-                        if (i == 1) return filtered.isEmpty ? const EmptyState('لا توجد حجوزات مطابقة') : const SizedBox.shrink();
-                        return BookingCard(booking: mapOf(filtered[i - 2]), token: widget.token, onChanged: load);
+                        if (i == 0)
+                          return error != null
+                              ? ErrorCard(message: error!, onRetry: load)
+                              : const SizedBox.shrink();
+                        if (i == 1)
+                          return filtered.isEmpty
+                              ? const EmptyState('لا توجد حجوزات مطابقة')
+                              : const SizedBox.shrink();
+                        return BookingCard(
+                            booking: mapOf(filtered[i - 2]),
+                            token: widget.token,
+                            onChanged: load);
                       },
                     ),
             ),
@@ -732,17 +1004,28 @@ class BookingMiniTile extends StatelessWidget {
   final Map booking;
   final String token;
   final VoidCallback onChanged;
-  const BookingMiniTile({super.key, required this.booking, required this.token, required this.onChanged});
+  const BookingMiniTile(
+      {super.key,
+      required this.booking,
+      required this.token,
+      required this.onChanged});
 
   @override
   Widget build(BuildContext context) => ListTile(
         contentPadding: EdgeInsets.zero,
-        leading: const CircleAvatar(backgroundColor: BhsColors.softPink, foregroundColor: BhsColors.roseGoldDeep, child: Icon(Icons.event_note)),
-        title: Text(txt(booking['customer_name'], 'عميلة'), style: const TextStyle(fontWeight: FontWeight.w900)),
-        subtitle: Text('${txt(booking['service_name'])} • ${dateOnly(booking['booking_date'])} ${timeOnly(booking['booking_time'])}'),
+        leading: const CircleAvatar(
+            backgroundColor: BhsColors.softPink,
+            foregroundColor: BhsColors.roseGoldDeep,
+            child: Icon(Icons.event_note)),
+        title: Text(txt(booking['customer_name'], 'عميلة'),
+            style: const TextStyle(fontWeight: FontWeight.w900)),
+        subtitle: Text(
+            '${txt(booking['service_name'])} • ${dateOnly(booking['booking_date'])} ${timeOnly(booking['booking_time'])}'),
         trailing: const Icon(Icons.chevron_left),
         onTap: () async {
-          await Navigator.of(context).push(MaterialPageRoute(builder: (_) => BookingDetailsScreen(id: txt(booking['id']), token: token)));
+          await Navigator.of(context).push(MaterialPageRoute(
+              builder: (_) =>
+                  BookingDetailsScreen(id: txt(booking['id']), token: token)));
           onChanged();
         },
       );
@@ -752,7 +1035,11 @@ class BookingCard extends StatelessWidget {
   final Map booking;
   final String token;
   final VoidCallback onChanged;
-  const BookingCard({super.key, required this.booking, required this.token, required this.onChanged});
+  const BookingCard(
+      {super.key,
+      required this.booking,
+      required this.token,
+      required this.onChanged});
 
   @override
   Widget build(BuildContext context) {
@@ -761,21 +1048,41 @@ class BookingCard extends StatelessWidget {
     return LuxuryCard(
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Row(children: [
-          Expanded(child: Text('#${txt(booking['booking_number'], txt(booking['id']).substring(0, txt(booking['id']).length > 8 ? 8 : txt(booking['id']).length))}', style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w900, color: BhsColors.charcoal))),
+          Expanded(
+              child: Text(
+                  '#${txt(booking['booking_number'], txt(booking['id']).substring(0, txt(booking['id']).length > 8 ? 8 : txt(booking['id']).length))}',
+                  style: const TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.w900,
+                      color: BhsColors.charcoal))),
           StatusPill(label: bookingStatusLabel(status), status: status),
         ]),
         const SizedBox(height: 10),
-        InfoLine(icon: Icons.person_outline, label: txt(booking['customer_name'], 'عميلة'), value: txt(booking['customer_phone'])),
-        InfoLine(icon: Icons.spa_outlined, label: txt(booking['service_name']), value: txt(booking['service_category_name'])),
-        InfoLine(icon: Icons.location_on_outlined, label: txt(booking['city_name']), value: txt(booking['district_name'])),
-        InfoLine(icon: Icons.schedule_outlined, label: dateOnly(booking['booking_date']), value: timeOnly(booking['booking_time'])),
+        InfoLine(
+            icon: Icons.person_outline,
+            label: txt(booking['customer_name'], 'عميلة'),
+            value: txt(booking['customer_phone'])),
+        InfoLine(
+            icon: Icons.spa_outlined,
+            label: txt(booking['service_name']),
+            value: txt(booking['service_category_name'])),
+        InfoLine(
+            icon: Icons.location_on_outlined,
+            label: txt(booking['city_name']),
+            value: txt(booking['district_name'])),
+        InfoLine(
+            icon: Icons.schedule_outlined,
+            label: dateOnly(booking['booking_date']),
+            value: timeOnly(booking['booking_time'])),
         const SizedBox(height: 10),
         Row(children: [
           StatusPill(label: paymentLabel(payment), status: payment),
           const Spacer(),
           TextButton.icon(
             onPressed: () async {
-              await Navigator.of(context).push(MaterialPageRoute(builder: (_) => BookingDetailsScreen(id: txt(booking['id']), token: token)));
+              await Navigator.of(context).push(MaterialPageRoute(
+                  builder: (_) => BookingDetailsScreen(
+                      id: txt(booking['id']), token: token)));
               onChanged();
             },
             icon: const Icon(Icons.open_in_new),
@@ -790,7 +1097,8 @@ class BookingCard extends StatelessWidget {
 class BookingDetailsScreen extends StatefulWidget {
   final String id;
   final String token;
-  const BookingDetailsScreen({super.key, required this.id, required this.token});
+  const BookingDetailsScreen(
+      {super.key, required this.id, required this.token});
 
   @override
   State<BookingDetailsScreen> createState() => _BookingDetailsScreenState();
@@ -819,11 +1127,16 @@ class _BookingDetailsScreenState extends State<BookingDetailsScreen> {
   }
 
   Future<void> load() async {
-    setState(() { loading = true; error = null; });
+    setState(() {
+      loading = true;
+      error = null;
+    });
     try {
-      final data = mapOf(await ApiClient.get('/admin/bookings/${widget.id}', token: widget.token));
+      final data = mapOf(await ApiClient.get('/admin/bookings/${widget.id}',
+          token: widget.token));
       final b = mapOf(data['booking']);
-      final a = listOf(await ApiClient.get('/admin/artists', token: widget.token, forceRefresh: true));
+      final a = listOf(await ApiClient.get('/admin/artists',
+          token: widget.token, forceRefresh: true));
       booking = b;
       history = listOf(data['history']);
       events = listOf(data['events']);
@@ -845,7 +1158,9 @@ class _BookingDetailsScreenState extends State<BookingDetailsScreen> {
   Future<void> saveStatus() async {
     setState(() => saving = true);
     try {
-      await ApiClient.patch('/admin/bookings/${widget.id}/status', {'status': status}, token: widget.token);
+      await ApiClient.patch(
+          '/admin/bookings/${widget.id}/status', {'status': status},
+          token: widget.token);
       showToast(context, 'تم تحديث حالة الحجز');
       await load();
     } catch (e) {
@@ -858,13 +1173,21 @@ class _BookingDetailsScreenState extends State<BookingDetailsScreen> {
   Future<void> saveDetails() async {
     setState(() => saving = true);
     try {
-      await ApiClient.patch('/admin/bookings/${widget.id}/details', {
-        'estimated_price': estimatedPrice.text.trim().isEmpty ? null : estimatedPrice.text.trim(),
-        'final_price': finalPrice.text.trim().isEmpty ? null : finalPrice.text.trim(),
-        'deposit_amount': depositAmount.text.trim().isEmpty ? null : depositAmount.text.trim(),
-        'payment_status': paymentStatus,
-        'admin_notes': adminNotes.text.trim(),
-      }, token: widget.token);
+      await ApiClient.patch(
+          '/admin/bookings/${widget.id}/details',
+          {
+            'estimated_price': estimatedPrice.text.trim().isEmpty
+                ? null
+                : estimatedPrice.text.trim(),
+            'final_price':
+                finalPrice.text.trim().isEmpty ? null : finalPrice.text.trim(),
+            'deposit_amount': depositAmount.text.trim().isEmpty
+                ? null
+                : depositAmount.text.trim(),
+            'payment_status': paymentStatus,
+            'admin_notes': adminNotes.text.trim(),
+          },
+          token: widget.token);
       showToast(context, 'تم حفظ الملاحظات والدفع');
       await load();
     } catch (e) {
@@ -877,8 +1200,11 @@ class _BookingDetailsScreenState extends State<BookingDetailsScreen> {
   Future<void> assignArtist() async {
     setState(() => saving = true);
     try {
-      await ApiClient.patch('/admin/bookings/${widget.id}/assign-artist', {'artist_id': artistId.isEmpty ? null : artistId, 'force': true}, token: widget.token);
-      showToast(context, artistId.isEmpty ? 'تم إلغاء تعيين الخبيرة' : 'تم تعيين الخبيرة');
+      await ApiClient.patch('/admin/bookings/${widget.id}/assign-artist',
+          {'artist_id': artistId.isEmpty ? null : artistId, 'force': true},
+          token: widget.token);
+      showToast(context,
+          artistId.isEmpty ? 'تم إلغاء تعيين الخبيرة' : 'تم تعيين الخبيرة');
       await load();
     } catch (e) {
       showToast(context, 'تعذر تعيين الخبيرة: $e');
@@ -897,97 +1223,205 @@ class _BookingDetailsScreenState extends State<BookingDetailsScreen> {
                 child: ListView(
                   padding: const EdgeInsets.all(16),
                   children: [
-                    if (error != null) ErrorCard(message: error!, onRetry: load),
+                    if (error != null)
+                      ErrorCard(message: error!, onRetry: load),
                     LuxuryCard(
-                      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                        Row(children: [
-                          Expanded(child: Text('#${txt(booking['booking_number'], widget.id.substring(0, widget.id.length > 8 ? 8 : widget.id.length))}', style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w900, color: BhsColors.charcoal))),
-                          StatusPill(label: bookingStatusLabel(txt(booking['status'], 'new')), status: txt(booking['status'], 'new')),
-                        ]),
-                        const SizedBox(height: 12),
-                        InfoLine(icon: Icons.person_outline, label: 'العميلة', value: '${txt(booking['customer_name'])} / ${txt(booking['customer_phone'])}'),
-                        InfoLine(icon: Icons.spa_outlined, label: 'الخدمة', value: txt(booking['service_name'])),
-                        InfoLine(icon: Icons.location_on_outlined, label: 'الموقع', value: '${txt(booking['city_name'])} - ${txt(booking['district_name'])}'),
-                        InfoLine(icon: Icons.schedule_outlined, label: 'الموعد', value: '${dateOnly(booking['booking_date'])} ${timeOnly(booking['booking_time'])}'),
-                        InfoLine(icon: Icons.groups_outlined, label: 'الخبيرة', value: txt(booking['artist_name'], 'لم يتم التعيين')),
-                      ]),
+                      child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(children: [
+                              Expanded(
+                                  child: Text(
+                                      '#${txt(booking['booking_number'], widget.id.substring(0, widget.id.length > 8 ? 8 : widget.id.length))}',
+                                      style: const TextStyle(
+                                          fontSize: 22,
+                                          fontWeight: FontWeight.w900,
+                                          color: BhsColors.charcoal))),
+                              StatusPill(
+                                  label: bookingStatusLabel(
+                                      txt(booking['status'], 'new')),
+                                  status: txt(booking['status'], 'new')),
+                            ]),
+                            const SizedBox(height: 12),
+                            InfoLine(
+                                icon: Icons.person_outline,
+                                label: 'العميلة',
+                                value:
+                                    '${txt(booking['customer_name'])} / ${txt(booking['customer_phone'])}'),
+                            InfoLine(
+                                icon: Icons.spa_outlined,
+                                label: 'الخدمة',
+                                value: txt(booking['service_name'])),
+                            InfoLine(
+                                icon: Icons.location_on_outlined,
+                                label: 'الموقع',
+                                value:
+                                    '${txt(booking['city_name'])} - ${txt(booking['district_name'])}'),
+                            InfoLine(
+                                icon: Icons.schedule_outlined,
+                                label: 'الموعد',
+                                value:
+                                    '${dateOnly(booking['booking_date'])} ${timeOnly(booking['booking_time'])}'),
+                            InfoLine(
+                                icon: Icons.groups_outlined,
+                                label: 'الخبيرة',
+                                value: txt(
+                                    booking['artist_name'], 'لم يتم التعيين')),
+                          ]),
                     ),
                     LuxuryCard(
-                      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                        const SectionTitle('متابعة الحالة'),
-                        DropdownButtonFormField<String>(
-                          value: status,
-                          decoration: const InputDecoration(labelText: 'حالة الحجز'),
-                          items: const [
-                            DropdownMenuItem(value: 'new', child: Text('طلب جديد')),
-                            DropdownMenuItem(value: 'under_review', child: Text('قيد المراجعة')),
-                            DropdownMenuItem(value: 'waiting_customer_confirmation', child: Text('بانتظار تأكيد العميلة')),
-                            DropdownMenuItem(value: 'confirmed', child: Text('تم التأكيد')),
-                            DropdownMenuItem(value: 'beautician_assigned', child: Text('تم تعيين خبيرة')),
-                            DropdownMenuItem(value: 'in_progress', child: Text('قيد التنفيذ')),
-                            DropdownMenuItem(value: 'completed', child: Text('مكتمل')),
-                            DropdownMenuItem(value: 'cancelled', child: Text('ملغي')),
-                          ],
-                          onChanged: (v) => setState(() => status = v ?? status),
-                        ),
-                        const SizedBox(height: 10),
-                        FilledButton.icon(onPressed: saving ? null : saveStatus, icon: const Icon(Icons.save_outlined), label: const Text('حفظ الحالة')),
-                      ]),
+                      child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const SectionTitle('متابعة الحالة'),
+                            DropdownButtonFormField<String>(
+                              value: status,
+                              decoration: const InputDecoration(
+                                  labelText: 'حالة الحجز'),
+                              items: const [
+                                DropdownMenuItem(
+                                    value: 'new', child: Text('طلب جديد')),
+                                DropdownMenuItem(
+                                    value: 'under_review',
+                                    child: Text('قيد المراجعة')),
+                                DropdownMenuItem(
+                                    value: 'waiting_customer_confirmation',
+                                    child: Text('بانتظار تأكيد العميلة')),
+                                DropdownMenuItem(
+                                    value: 'confirmed',
+                                    child: Text('تم التأكيد')),
+                                DropdownMenuItem(
+                                    value: 'beautician_assigned',
+                                    child: Text('تم تعيين خبيرة')),
+                                DropdownMenuItem(
+                                    value: 'in_progress',
+                                    child: Text('قيد التنفيذ')),
+                                DropdownMenuItem(
+                                    value: 'completed', child: Text('مكتمل')),
+                                DropdownMenuItem(
+                                    value: 'cancelled', child: Text('ملغي')),
+                              ],
+                              onChanged: (v) =>
+                                  setState(() => status = v ?? status),
+                            ),
+                            const SizedBox(height: 10),
+                            FilledButton.icon(
+                                onPressed: saving ? null : saveStatus,
+                                icon: const Icon(Icons.save_outlined),
+                                label: const Text('حفظ الحالة')),
+                          ]),
                     ),
                     LuxuryCard(
-                      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                        const SectionTitle('تعيين خبيرة'),
-                        DropdownButtonFormField<String>(
-                          value: artists.any((a) => txt(mapOf(a)['id']) == artistId) ? artistId : '',
-                          decoration: const InputDecoration(labelText: 'الخبيرة المعينة'),
-                          items: [
-                            const DropdownMenuItem(value: '', child: Text('بدون تعيين')),
-                            ...artists.map((a) {
-                              final m = mapOf(a);
-                              return DropdownMenuItem(value: txt(m['id']), child: Text('${txt(m['name'])} - ${txt(m['phone'])}'));
-                            }),
-                          ],
-                          onChanged: (v) => setState(() => artistId = v ?? ''),
-                        ),
-                        const SizedBox(height: 10),
-                        FilledButton.icon(onPressed: saving ? null : assignArtist, icon: const Icon(Icons.person_add_alt), label: const Text('حفظ تعيين الخبيرة')),
-                      ]),
+                      child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const SectionTitle('تعيين خبيرة'),
+                            DropdownButtonFormField<String>(
+                              value: artists.any(
+                                      (a) => txt(mapOf(a)['id']) == artistId)
+                                  ? artistId
+                                  : '',
+                              decoration: const InputDecoration(
+                                  labelText: 'الخبيرة المعينة'),
+                              items: [
+                                const DropdownMenuItem(
+                                    value: '', child: Text('بدون تعيين')),
+                                ...artists.map((a) {
+                                  final m = mapOf(a);
+                                  return DropdownMenuItem(
+                                      value: txt(m['id']),
+                                      child: Text(
+                                          '${txt(m['name'])} - ${txt(m['phone'])}'));
+                                }),
+                              ],
+                              onChanged: (v) =>
+                                  setState(() => artistId = v ?? ''),
+                            ),
+                            const SizedBox(height: 10),
+                            FilledButton.icon(
+                                onPressed: saving ? null : assignArtist,
+                                icon: const Icon(Icons.person_add_alt),
+                                label: const Text('حفظ تعيين الخبيرة')),
+                          ]),
                     ),
                     LuxuryCard(
-                      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                        const SectionTitle('الدفع والملاحظات'),
-                        DropdownButtonFormField<String>(
-                          value: paymentStatus,
-                          decoration: const InputDecoration(labelText: 'حالة الدفع'),
-                          items: const [
-                            DropdownMenuItem(value: 'unpaid', child: Text('غير مدفوع')),
-                            DropdownMenuItem(value: 'deposit_paid', child: Text('عربون مدفوع')),
-                            DropdownMenuItem(value: 'paid', child: Text('مدفوع بالكامل')),
-                            DropdownMenuItem(value: 'refunded', child: Text('مسترجع')),
-                          ],
-                          onChanged: (v) => setState(() => paymentStatus = v ?? paymentStatus),
-                        ),
-                        const SizedBox(height: 10),
-                        Row(children: [
-                          Expanded(child: TextField(controller: estimatedPrice, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'السعر المتوقع'))),
-                          const SizedBox(width: 8),
-                          Expanded(child: TextField(controller: finalPrice, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'السعر النهائي'))),
-                        ]),
-                        const SizedBox(height: 10),
-                        TextField(controller: depositAmount, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'العربون')),
-                        const SizedBox(height: 10),
-                        TextField(controller: adminNotes, minLines: 3, maxLines: 5, decoration: const InputDecoration(labelText: 'ملاحظات الإدارة')),
-                        const SizedBox(height: 10),
-                        FilledButton.icon(onPressed: saving ? null : saveDetails, icon: const Icon(Icons.note_add_outlined), label: const Text('حفظ الدفع والملاحظات')),
-                      ]),
+                      child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const SectionTitle('الدفع والملاحظات'),
+                            DropdownButtonFormField<String>(
+                              value: paymentStatus,
+                              decoration: const InputDecoration(
+                                  labelText: 'حالة الدفع'),
+                              items: const [
+                                DropdownMenuItem(
+                                    value: 'unpaid', child: Text('غير مدفوع')),
+                                DropdownMenuItem(
+                                    value: 'deposit_paid',
+                                    child: Text('عربون مدفوع')),
+                                DropdownMenuItem(
+                                    value: 'paid',
+                                    child: Text('مدفوع بالكامل')),
+                                DropdownMenuItem(
+                                    value: 'refunded', child: Text('مسترجع')),
+                              ],
+                              onChanged: (v) => setState(
+                                  () => paymentStatus = v ?? paymentStatus),
+                            ),
+                            const SizedBox(height: 10),
+                            Row(children: [
+                              Expanded(
+                                  child: TextField(
+                                      controller: estimatedPrice,
+                                      keyboardType: TextInputType.number,
+                                      decoration: const InputDecoration(
+                                          labelText: 'السعر المتوقع'))),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                  child: TextField(
+                                      controller: finalPrice,
+                                      keyboardType: TextInputType.number,
+                                      decoration: const InputDecoration(
+                                          labelText: 'السعر النهائي'))),
+                            ]),
+                            const SizedBox(height: 10),
+                            TextField(
+                                controller: depositAmount,
+                                keyboardType: TextInputType.number,
+                                decoration: const InputDecoration(
+                                    labelText: 'العربون')),
+                            const SizedBox(height: 10),
+                            TextField(
+                                controller: adminNotes,
+                                minLines: 3,
+                                maxLines: 5,
+                                decoration: const InputDecoration(
+                                    labelText: 'ملاحظات الإدارة')),
+                            const SizedBox(height: 10),
+                            FilledButton.icon(
+                                onPressed: saving ? null : saveDetails,
+                                icon: const Icon(Icons.note_add_outlined),
+                                label: const Text('حفظ الدفع والملاحظات')),
+                          ]),
                     ),
                     LuxuryCard(
-                      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                        const SectionTitle('سجل الحالة والأحداث'),
-                        if (history.isEmpty && events.isEmpty) const EmptyState('لا توجد أحداث مسجلة'),
-                        ...history.map((h) => TimelineTile(title: bookingStatusLabel(txt(mapOf(h)['new_status'])), subtitle: txt(mapOf(h)['note']), date: dateOnly(mapOf(h)['created_at']))),
-                        ...events.map((e) => TimelineTile(title: txt(mapOf(e)['title'], txt(mapOf(e)['event_type'])), subtitle: txt(mapOf(e)['description']), date: dateOnly(mapOf(e)['created_at']))),
-                      ]),
+                      child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const SectionTitle('سجل الحالة والأحداث'),
+                            if (history.isEmpty && events.isEmpty)
+                              const EmptyState('لا توجد أحداث مسجلة'),
+                            ...history.map((h) => TimelineTile(
+                                title: bookingStatusLabel(
+                                    txt(mapOf(h)['new_status'])),
+                                subtitle: txt(mapOf(h)['note']),
+                                date: dateOnly(mapOf(h)['created_at']))),
+                            ...events.map((e) => TimelineTile(
+                                title: txt(mapOf(e)['title'],
+                                    txt(mapOf(e)['event_type'])),
+                                subtitle: txt(mapOf(e)['description']),
+                                date: dateOnly(mapOf(e)['created_at']))),
+                          ]),
                     ),
                   ],
                 ),
@@ -1009,44 +1443,82 @@ class _CatalogScreenState extends State<CatalogScreen> {
   String? error;
 
   @override
-  void initState() { super.initState(); load(); }
+  void initState() {
+    super.initState();
+    load();
+  }
 
   Future<void> load() async {
-    setState(() { loading = true; error = null; });
+    setState(() {
+      loading = true;
+      error = null;
+    });
     try {
-      catalog = mapOf(await ApiClient.get('/admin/catalog?all=1', token: widget.token, forceRefresh: true));
-    } catch (e) { error = e.toString(); }
-    finally { if (mounted) setState(() => loading = false); }
+      catalog = mapOf(await ApiClient.get('/admin/catalog?all=1',
+          token: widget.token, forceRefresh: true));
+    } catch (e) {
+      error = e.toString();
+    } finally {
+      if (mounted) setState(() => loading = false);
+    }
   }
 
   @override
   Widget build(BuildContext context) => RefreshIndicator(
         onRefresh: load,
-        child: loading ? const Center(child: CircularProgressIndicator()) : ListView(
-          padding: const EdgeInsets.all(16),
-          children: [
-            if (error != null) ErrorCard(message: error!, onRetry: load),
-            GridView.count(
-              shrinkWrap: true,
-              physics: const NeverScrollableScrollPhysics(),
-              crossAxisCount: 2,
-              mainAxisSpacing: 12,
-              crossAxisSpacing: 12,
-              childAspectRatio: 1.28,
-              children: [
-                KpiCard(title: 'الأقسام', value: '${listOf(catalog['service_categories']).length}', icon: Icons.category_outlined),
-                KpiCard(title: 'الخدمات', value: '${listOf(catalog['services']).length}', icon: Icons.spa_outlined),
-                KpiCard(title: 'المناطق', value: '${listOf(catalog['regions']).length}', icon: Icons.map_outlined),
-                KpiCard(title: 'المدن', value: '${listOf(catalog['cities']).length}', icon: Icons.location_city_outlined),
-              ],
-            ),
-            const SizedBox(height: 14),
-            CatalogGroup(title: 'أقسام الخدمات', items: listOf(catalog['service_categories']), icon: Icons.category_outlined),
-            CatalogGroup(title: 'الخدمات', items: listOf(catalog['services']), icon: Icons.spa_outlined, subtitleKey: 'base_price'),
-            CatalogGroup(title: 'المدن', items: listOf(catalog['cities']), icon: Icons.location_city_outlined),
-            CatalogGroup(title: 'الأحياء', items: listOf(catalog['districts']), icon: Icons.pin_drop_outlined),
-          ],
-        ),
+        child: loading
+            ? const Center(child: CircularProgressIndicator())
+            : ListView(
+                padding: const EdgeInsets.all(16),
+                children: [
+                  if (error != null) ErrorCard(message: error!, onRetry: load),
+                  GridView.count(
+                    shrinkWrap: true,
+                    physics: const NeverScrollableScrollPhysics(),
+                    crossAxisCount: 2,
+                    mainAxisSpacing: 12,
+                    crossAxisSpacing: 12,
+                    childAspectRatio: 1.28,
+                    children: [
+                      KpiCard(
+                          title: 'الأقسام',
+                          value:
+                              '${listOf(catalog['service_categories']).length}',
+                          icon: Icons.category_outlined),
+                      KpiCard(
+                          title: 'الخدمات',
+                          value: '${listOf(catalog['services']).length}',
+                          icon: Icons.spa_outlined),
+                      KpiCard(
+                          title: 'المناطق',
+                          value: '${listOf(catalog['regions']).length}',
+                          icon: Icons.map_outlined),
+                      KpiCard(
+                          title: 'المدن',
+                          value: '${listOf(catalog['cities']).length}',
+                          icon: Icons.location_city_outlined),
+                    ],
+                  ),
+                  const SizedBox(height: 14),
+                  CatalogGroup(
+                      title: 'أقسام الخدمات',
+                      items: listOf(catalog['service_categories']),
+                      icon: Icons.category_outlined),
+                  CatalogGroup(
+                      title: 'الخدمات',
+                      items: listOf(catalog['services']),
+                      icon: Icons.spa_outlined,
+                      subtitleKey: 'base_price'),
+                  CatalogGroup(
+                      title: 'المدن',
+                      items: listOf(catalog['cities']),
+                      icon: Icons.location_city_outlined),
+                  CatalogGroup(
+                      title: 'الأحياء',
+                      items: listOf(catalog['districts']),
+                      icon: Icons.pin_drop_outlined),
+                ],
+              ),
       );
 }
 
@@ -1055,7 +1527,12 @@ class CatalogGroup extends StatelessWidget {
   final List items;
   final IconData icon;
   final String subtitleKey;
-  const CatalogGroup({super.key, required this.title, required this.items, required this.icon, this.subtitleKey = 'status'});
+  const CatalogGroup(
+      {super.key,
+      required this.title,
+      required this.items,
+      required this.icon,
+      this.subtitleKey = 'status'});
 
   @override
   Widget build(BuildContext context) => LuxuryCard(
@@ -1066,12 +1543,21 @@ class CatalogGroup extends StatelessWidget {
             final item = mapOf(raw);
             return ListTile(
               contentPadding: EdgeInsets.zero,
-              leading: CircleAvatar(backgroundColor: BhsColors.softPink, foregroundColor: BhsColors.roseGoldDeep, child: Icon(icon, size: 20)),
-              title: Text(txt(item['name_ar'] ?? item['name']), style: const TextStyle(fontWeight: FontWeight.w900)),
-              subtitle: Text(subtitleKey == 'base_price' ? 'السعر الأساسي: ${txt(item['base_price'], '-')}' : 'الحالة: ${txt(item['status'], '-')}'),
+              leading: CircleAvatar(
+                  backgroundColor: BhsColors.softPink,
+                  foregroundColor: BhsColors.roseGoldDeep,
+                  child: Icon(icon, size: 20)),
+              title: Text(txt(item['name_ar'] ?? item['name']),
+                  style: const TextStyle(fontWeight: FontWeight.w900)),
+              subtitle: Text(subtitleKey == 'base_price'
+                  ? 'السعر الأساسي: ${txt(item['base_price'], '-')}'
+                  : 'الحالة: ${txt(item['status'], '-')}'),
             );
           }),
-          if (items.length > 12) Text('و ${items.length - 12} عنصر آخر...', style: const TextStyle(color: BhsColors.mochaDark, fontWeight: FontWeight.w700)),
+          if (items.length > 12)
+            Text('و ${items.length - 12} عنصر آخر...',
+                style: const TextStyle(
+                    color: BhsColors.mochaDark, fontWeight: FontWeight.w700)),
         ]),
       );
 }
@@ -1091,62 +1577,116 @@ class _ArtistsScreenState extends State<ArtistsScreen> {
   String? error;
 
   @override
-  void initState() { super.initState(); load(); }
+  void initState() {
+    super.initState();
+    load();
+  }
 
   Future<void> load() async {
-    setState(() { loading = true; error = null; });
-    try { artists = listOf(await ApiClient.get('/admin/artists', token: widget.token, forceRefresh: true)); }
-    catch (e) { error = e.toString(); }
-    finally { if (mounted) setState(() => loading = false); }
+    setState(() {
+      loading = true;
+      error = null;
+    });
+    try {
+      artists = listOf(await ApiClient.get('/admin/artists',
+          token: widget.token, forceRefresh: true));
+    } catch (e) {
+      error = e.toString();
+    } finally {
+      if (mounted) setState(() => loading = false);
+    }
   }
 
   List get filtered => artists.where((raw) {
-    final a = mapOf(raw);
-    final hay = '${a['name']} ${a['phone']} ${a['city_name']} ${a['main_expertise_category_name']}'.toLowerCase();
-    return hay.contains(query.toLowerCase());
-  }).toList();
+        final a = mapOf(raw);
+        final hay =
+            '${a['name']} ${a['phone']} ${a['city_name']} ${a['main_expertise_category_name']}'
+                .toLowerCase();
+        return hay.contains(query.toLowerCase());
+      }).toList();
 
   @override
   Widget build(BuildContext context) => Column(children: [
-    Padding(
-      padding: const EdgeInsets.all(16),
-      child: TextField(onChanged: (v) => setState(() => query = v), decoration: const InputDecoration(labelText: 'بحث عن خبيرة', prefixIcon: Icon(Icons.search))),
-    ),
-    Expanded(
-      child: RefreshIndicator(
-        onRefresh: load,
-        child: loading ? const Center(child: CircularProgressIndicator()) : ListView.builder(
-          padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
-          itemCount: filtered.length + 2,
-          itemBuilder: (context, i) {
-            if (i == 0) return error != null ? ErrorCard(message: error!, onRetry: load) : const SizedBox.shrink();
-            if (i == 1) return filtered.isEmpty ? const EmptyState('لا توجد خبيرات') : const SizedBox.shrink();
-            final a = mapOf(filtered[i - 2]);
-            final status = txt(a['status'], 'active');
-            return LuxuryCard(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Row(children: [
-                const CircleAvatar(backgroundColor: BhsColors.softPink, foregroundColor: BhsColors.roseGoldDeep, child: Icon(Icons.person_outline)),
-                const SizedBox(width: 10),
-                Expanded(child: Text(txt(a['name']), style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w900, color: BhsColors.charcoal))),
-                StatusPill(label: status == 'active' ? 'فعالة' : 'غير فعالة', status: status == 'active' ? 'paid' : 'cancelled'),
-              ]),
-              const SizedBox(height: 10),
-              InfoLine(icon: Icons.phone_outlined, label: 'الجوال', value: txt(a['phone'])),
-              InfoLine(icon: Icons.location_city_outlined, label: 'المدينة', value: txt(a['city_name'])),
-              InfoLine(icon: Icons.spa_outlined, label: 'التخصص', value: txt(a['main_expertise_category_name'])),
-              InfoLine(icon: Icons.star_outline, label: 'التقييم', value: txt(a['rating'], '0')),
-            ]));
-          },
+        Padding(
+          padding: const EdgeInsets.all(16),
+          child: TextField(
+              onChanged: (v) => setState(() => query = v),
+              decoration: const InputDecoration(
+                  labelText: 'بحث عن خبيرة', prefixIcon: Icon(Icons.search))),
         ),
-      ),
-    ),
-  ]);
+        Expanded(
+          child: RefreshIndicator(
+            onRefresh: load,
+            child: loading
+                ? const Center(child: CircularProgressIndicator())
+                : ListView.builder(
+                    padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+                    itemCount: filtered.length + 2,
+                    itemBuilder: (context, i) {
+                      if (i == 0)
+                        return error != null
+                            ? ErrorCard(message: error!, onRetry: load)
+                            : const SizedBox.shrink();
+                      if (i == 1)
+                        return filtered.isEmpty
+                            ? const EmptyState('لا توجد خبيرات')
+                            : const SizedBox.shrink();
+                      final a = mapOf(filtered[i - 2]);
+                      final status = txt(a['status'], 'active');
+                      return LuxuryCard(
+                          child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                            Row(children: [
+                              const CircleAvatar(
+                                  backgroundColor: BhsColors.softPink,
+                                  foregroundColor: BhsColors.roseGoldDeep,
+                                  child: Icon(Icons.person_outline)),
+                              const SizedBox(width: 10),
+                              Expanded(
+                                  child: Text(txt(a['name']),
+                                      style: const TextStyle(
+                                          fontSize: 18,
+                                          fontWeight: FontWeight.w900,
+                                          color: BhsColors.charcoal))),
+                              StatusPill(
+                                  label: status == 'active'
+                                      ? 'فعالة'
+                                      : 'غير فعالة',
+                                  status: status == 'active'
+                                      ? 'paid'
+                                      : 'cancelled'),
+                            ]),
+                            const SizedBox(height: 10),
+                            InfoLine(
+                                icon: Icons.phone_outlined,
+                                label: 'الجوال',
+                                value: txt(a['phone'])),
+                            InfoLine(
+                                icon: Icons.location_city_outlined,
+                                label: 'المدينة',
+                                value: txt(a['city_name'])),
+                            InfoLine(
+                                icon: Icons.spa_outlined,
+                                label: 'التخصص',
+                                value: txt(a['main_expertise_category_name'])),
+                            InfoLine(
+                                icon: Icons.star_outline,
+                                label: 'التقييم',
+                                value: txt(a['rating'], '0')),
+                          ]));
+                    },
+                  ),
+          ),
+        ),
+      ]);
 }
 
 class SystemToolsScreen extends StatefulWidget {
   final String token;
   final VoidCallback onLogout;
-  const SystemToolsScreen({super.key, required this.token, required this.onLogout});
+  const SystemToolsScreen(
+      {super.key, required this.token, required this.onLogout});
 
   @override
   State<SystemToolsScreen> createState() => _SystemToolsScreenState();
@@ -1160,67 +1700,125 @@ class _SystemToolsScreenState extends State<SystemToolsScreen> {
   String? error;
 
   @override
-  void initState() { super.initState(); load(); }
+  void initState() {
+    super.initState();
+    load();
+  }
 
   Future<void> load() async {
-    setState(() { loading = true; error = null; });
+    setState(() {
+      loading = true;
+      error = null;
+    });
     try {
-      final data = mapOf(await ApiClient.get('/admin/backups', token: widget.token, forceRefresh: true));
+      final data = mapOf(await ApiClient.get('/admin/backups',
+          token: widget.token, forceRefresh: true));
       files = listOf(data['files']);
       backupDir = txt(data['backup_dir'], '');
-    } catch (e) { error = e.toString(); }
-    finally { if (mounted) setState(() => loading = false); }
+    } catch (e) {
+      if (e.toString().contains('Super Admin access required')) {
+        files = [];
+        backupDir = '';
+        error = null;
+      } else {
+        error = e.toString();
+      }
+    } finally {
+      if (mounted) setState(() => loading = false);
+    }
   }
 
   Future<void> createBackup(String type) async {
     setState(() => working = true);
     try {
-      final data = mapOf(await ApiClient.post('/admin/backups/$type', {}, token: widget.token));
-      showToast(context, 'تم إنشاء النسخة: ${txt(data['fileName'])}');
+      await ApiClient.get('/admin/exports/tenant-data',
+          token: widget.token, forceRefresh: true);
+      showToast(context, 'تم تجهيز تصدير بيانات الشركة بنجاح');
       await load();
-    } catch (e) { showToast(context, 'تعذر إنشاء النسخة: $e'); }
-    finally { if (mounted) setState(() => working = false); }
+    } catch (e) {
+      showToast(context, 'تعذر تصدير بيانات الشركة: $e');
+    } finally {
+      if (mounted) setState(() => working = false);
+    }
   }
 
   @override
   Widget build(BuildContext context) => RefreshIndicator(
-    onRefresh: load,
-    child: loading ? const Center(child: CircularProgressIndicator()) : ListView(
-      padding: const EdgeInsets.all(16),
-      children: [
-        if (error != null) ErrorCard(message: error!, onRetry: load),
-        LuxuryCard(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          const SectionTitle('النسخ الاحتياطي'),
-          const Text('إنشاء نسخة SQL من قاعدة البيانات عبر Backend وحفظها في مجلد backups.', style: TextStyle(color: BhsColors.mochaDark, fontWeight: FontWeight.w700)),
-          const SizedBox(height: 14),
-          FilledButton.icon(onPressed: working ? null : () => createBackup('local'), icon: const Icon(Icons.storage_outlined), label: const Text('نسخة احتياطية من المحلي')),
-          const SizedBox(height: 10),
-          OutlinedButton.icon(onPressed: working ? null : () => createBackup('supabase'), icon: const Icon(Icons.cloud_outlined), label: const Text('نسخة احتياطية من Supabase')),
-          if (working) const Padding(padding: EdgeInsets.only(top: 12), child: LinearProgressIndicator()),
-          if (backupDir.isNotEmpty) Padding(padding: const EdgeInsets.only(top: 12), child: Text('مجلد النسخ: $backupDir', style: const TextStyle(fontSize: 12, color: BhsColors.mocha))),
-        ])),
-        LuxuryCard(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          const SectionTitle('آخر النسخ'),
-          if (files.isEmpty) const EmptyState('لا توجد نسخ محفوظة'),
-          ...files.map((raw) {
-            final f = mapOf(raw);
-            return ListTile(
-              contentPadding: EdgeInsets.zero,
-              leading: const CircleAvatar(backgroundColor: BhsColors.softPink, foregroundColor: BhsColors.roseGoldDeep, child: Icon(Icons.description_outlined)),
-              title: Text(txt(f['fileName'] ?? f['name']), style: const TextStyle(fontWeight: FontWeight.w900)),
-              subtitle: Text('${txt(f['sizeLabel'] ?? f['size'])} • ${txt(f['modifiedAt'] ?? f['created_at'])}'),
-            );
-          }),
-        ])),
-        LuxuryCard(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          const SectionTitle('إعدادات التطبيق'),
-          InfoLine(icon: Icons.link_outlined, label: 'API', value: apiBaseUrl),
-          const SizedBox(height: 10),
-          OutlinedButton.icon(onPressed: widget.onLogout, icon: const Icon(Icons.logout), label: const Text('تسجيل خروج')),
-        ])),
-      ],
-    ),
-  );
+        onRefresh: load,
+        child: loading
+            ? const Center(child: CircularProgressIndicator())
+            : ListView(
+                padding: const EdgeInsets.all(16),
+                children: [
+                  if (error != null) ErrorCard(message: error!, onRetry: load),
+                  LuxuryCard(
+                      child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                        const SectionTitle('النسخ والتصدير'),
+                        const Text(
+                            'تصدير بيانات الشركة فقط. نسخة SQL الكاملة متاحة للـ Super Admin من لوحة الويب.',
+                            style: TextStyle(
+                                color: BhsColors.mochaDark,
+                                fontWeight: FontWeight.w700)),
+                        const SizedBox(height: 14),
+                        FilledButton.icon(
+                            onPressed:
+                                working ? null : () => createBackup('local'),
+                            icon: const Icon(Icons.download_outlined),
+                            label: const Text('تصدير بيانات الشركة')),
+                        if (working)
+                          const Padding(
+                              padding: EdgeInsets.only(top: 12),
+                              child: LinearProgressIndicator()),
+                        if (backupDir.isNotEmpty)
+                          Padding(
+                              padding: const EdgeInsets.only(top: 12),
+                              child: Text('مجلد النسخ: $backupDir',
+                                  style: const TextStyle(
+                                      fontSize: 12, color: BhsColors.mocha))),
+                      ])),
+                  LuxuryCard(
+                      child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                        const SectionTitle('آخر النسخ'),
+                        if (files.isEmpty)
+                          const EmptyState('لا توجد نسخ محفوظة'),
+                        ...files.map((raw) {
+                          final f = mapOf(raw);
+                          return ListTile(
+                            contentPadding: EdgeInsets.zero,
+                            leading: const CircleAvatar(
+                                backgroundColor: BhsColors.softPink,
+                                foregroundColor: BhsColors.roseGoldDeep,
+                                child: Icon(Icons.description_outlined)),
+                            title: Text(txt(f['fileName'] ?? f['name']),
+                                style: const TextStyle(
+                                    fontWeight: FontWeight.w900)),
+                            subtitle: Text(
+                                '${txt(f['sizeLabel'] ?? f['size'])} • ${txt(f['modifiedAt'] ?? f['created_at'])}'),
+                          );
+                        }),
+                      ])),
+                  LuxuryCard(
+                      child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                        const SectionTitle('إعدادات التطبيق'),
+                        InfoLine(
+                            icon: Icons.link_outlined,
+                            label: 'API',
+                            value: apiBaseUrl),
+                        const SizedBox(height: 10),
+                        OutlinedButton.icon(
+                            onPressed: widget.onLogout,
+                            icon: const Icon(Icons.logout),
+                            label: const Text('تسجيل خروج')),
+                      ])),
+                ],
+              ),
+      );
 }
 
 class SectionTitle extends StatelessWidget {
@@ -1229,8 +1827,28 @@ class SectionTitle extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Padding(
-        padding: const EdgeInsets.only(bottom: 10),
-        child: Text(text, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w900, color: BhsColors.charcoal)),
+        padding: const EdgeInsets.only(bottom: 12, top: 4),
+        child: Row(children: [
+          Container(
+            width: 4,
+            height: 28,
+            margin: const EdgeInsets.only(left: 10),
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(999),
+              gradient: const LinearGradient(
+                  colors: [BhsColors.roseGoldDeep, BhsColors.softPink],
+                  begin: Alignment.topCenter,
+                  end: Alignment.bottomCenter),
+            ),
+          ),
+          Expanded(
+              child: Text(text,
+                  style: const TextStyle(
+                      fontSize: 19,
+                      fontWeight: FontWeight.w900,
+                      color: BhsColors.charcoal,
+                      height: 1.2))),
+        ]),
       );
 }
 
@@ -1238,7 +1856,11 @@ class InfoLine extends StatelessWidget {
   final IconData icon;
   final String label;
   final String value;
-  const InfoLine({super.key, required this.icon, required this.label, required this.value});
+  const InfoLine(
+      {super.key,
+      required this.icon,
+      required this.label,
+      required this.value});
 
   @override
   Widget build(BuildContext context) => Padding(
@@ -1246,8 +1868,13 @@ class InfoLine extends StatelessWidget {
         child: Row(children: [
           Icon(icon, size: 18, color: BhsColors.roseGoldDeep),
           const SizedBox(width: 8),
-          Text('$label: ', style: const TextStyle(color: BhsColors.mochaDark, fontWeight: FontWeight.w800)),
-          Expanded(child: Text(value, style: const TextStyle(color: BhsColors.charcoal, fontWeight: FontWeight.w800))),
+          Text('$label: ',
+              style: const TextStyle(
+                  color: BhsColors.mochaDark, fontWeight: FontWeight.w800)),
+          Expanded(
+              child: Text(value,
+                  style: const TextStyle(
+                      color: BhsColors.charcoal, fontWeight: FontWeight.w800))),
         ]),
       );
 }
@@ -1256,21 +1883,42 @@ class TimelineTile extends StatelessWidget {
   final String title;
   final String subtitle;
   final String date;
-  const TimelineTile({super.key, required this.title, required this.subtitle, required this.date});
+  const TimelineTile(
+      {super.key,
+      required this.title,
+      required this.subtitle,
+      required this.date});
 
   @override
   Widget build(BuildContext context) => Container(
         margin: const EdgeInsets.only(bottom: 10),
         padding: const EdgeInsets.all(12),
-        decoration: BoxDecoration(color: BhsColors.softPink.withOpacity(.55), borderRadius: BorderRadius.circular(18)),
+        decoration: BoxDecoration(
+          color: BhsColors.softPink.withOpacity(.48),
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(color: BhsColors.roseGold.withOpacity(.22)),
+        ),
         child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          const Icon(Icons.radio_button_checked, color: BhsColors.roseGoldDeep, size: 18),
+          const Icon(Icons.radio_button_checked,
+              color: BhsColors.roseGoldDeep, size: 18),
           const SizedBox(width: 8),
-          Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Text(title, style: const TextStyle(fontWeight: FontWeight.w900, color: BhsColors.charcoal)),
-            if (subtitle != '-') Text(subtitle, style: const TextStyle(color: BhsColors.mochaDark, fontWeight: FontWeight.w700)),
-            Text(date, style: const TextStyle(color: BhsColors.mocha, fontSize: 12)),
-          ])),
+          Expanded(
+              child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                Text(title,
+                    style: const TextStyle(
+                        fontWeight: FontWeight.w900,
+                        color: BhsColors.charcoal)),
+                if (subtitle != '-')
+                  Text(subtitle,
+                      style: const TextStyle(
+                          color: BhsColors.mochaDark,
+                          fontWeight: FontWeight.w700)),
+                Text(date,
+                    style:
+                        const TextStyle(color: BhsColors.mocha, fontSize: 12)),
+              ])),
         ]),
       );
 }
@@ -1283,11 +1931,22 @@ class EmptyState extends StatelessWidget {
   Widget build(BuildContext context) => Container(
         width: double.infinity,
         padding: const EdgeInsets.all(20),
-        decoration: BoxDecoration(color: BhsColors.softPink.withOpacity(.45), borderRadius: BorderRadius.circular(20)),
+        decoration: BoxDecoration(
+          gradient: LinearGradient(colors: [
+            BhsColors.softPink.withOpacity(.42),
+            Colors.white.withOpacity(.88)
+          ], begin: Alignment.topRight, end: Alignment.bottomLeft),
+          borderRadius: BorderRadius.circular(22),
+          border: Border.all(color: BhsColors.roseGold.withOpacity(.24)),
+        ),
         child: Column(children: [
-          const Icon(Icons.inbox_outlined, color: BhsColors.roseGoldDeep, size: 34),
+          const Icon(Icons.inbox_outlined,
+              color: BhsColors.roseGoldDeep, size: 34),
           const SizedBox(height: 8),
-          Text(message, textAlign: TextAlign.center, style: const TextStyle(color: BhsColors.mochaDark, fontWeight: FontWeight.w800)),
+          Text(message,
+              textAlign: TextAlign.center,
+              style: const TextStyle(
+                  color: BhsColors.mochaDark, fontWeight: FontWeight.w800)),
         ]),
       );
 }
@@ -1300,11 +1959,18 @@ class ErrorCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) => LuxuryCard(
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          const Text('حدث خطأ', style: TextStyle(color: BhsColors.danger, fontSize: 18, fontWeight: FontWeight.w900)),
+          const Text('حدث خطأ',
+              style: TextStyle(
+                  color: BhsColors.danger,
+                  fontSize: 18,
+                  fontWeight: FontWeight.w900)),
           const SizedBox(height: 8),
           Text(message, style: const TextStyle(color: BhsColors.mochaDark)),
           const SizedBox(height: 10),
-          OutlinedButton.icon(onPressed: onRetry, icon: const Icon(Icons.refresh), label: const Text('إعادة المحاولة')),
+          OutlinedButton.icon(
+              onPressed: onRetry,
+              icon: const Icon(Icons.refresh),
+              label: const Text('إعادة المحاولة')),
         ]),
       );
 }

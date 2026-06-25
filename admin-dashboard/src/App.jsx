@@ -7,7 +7,6 @@ import {
   CalendarDays,
   CheckCircle2,
   ChevronDown,
-  Cloud,
   Clock,
   Database,
   Download,
@@ -481,6 +480,53 @@ function Select({
 }
 function sameId(a, b) { return String(a || "") === String(b || ""); }
 
+function BrandImageUpload({
+  value,
+  onChange,
+  onUpload,
+  onRemove,
+  fileName,
+  variant = "logo",
+  uploadLabel,
+  placeholder,
+  help,
+}) {
+  const isCover = variant === "cover";
+  return (
+    <div className="brand-upload-control">
+      <div className={`brand-preview ${isCover ? "cover-preview" : "logo-preview"}`}>
+        {value ? (
+          <img src={value} alt={isCover ? "Tenant cover preview" : "Tenant logo preview"} />
+        ) : isCover ? (
+          <Images size={26} />
+        ) : (
+          <Sparkles size={26} />
+        )}
+      </div>
+      <div className="brand-upload-body">
+        <TextInput
+          value={value || ""}
+          onChange={onChange}
+          placeholder={placeholder || "Image URL will appear here after upload"}
+        />
+        <div className="brand-upload-actions">
+          <label className="file-browse-btn">
+            <Upload size={16} /> {uploadLabel || "Browse / upload image"}
+            <input type="file" accept="image/*" onChange={(e) => onUpload?.(e.target.files?.[0])} />
+          </label>
+          {value && (
+            <button type="button" className="secondary icon-inline" onClick={onRemove}>
+              <X size={15} /> إزالة
+            </button>
+          )}
+        </div>
+        {fileName && <small className="selected-file-name">الملف المحدد: {fileName}</small>}
+        {help && <small>{help}</small>}
+      </div>
+    </div>
+  );
+}
+
 function OptionList({ items, label = "name_ar", empty = "اختر" }) {
   const list = Array.isArray(items) ? items : [];
   return (
@@ -680,6 +726,7 @@ function App() {
   const [selectedTenant, setSelectedTenant] = useState(null);
   const [tenantAdminForm, setTenantAdminForm] = useState({ name: "", email: "", password: "", role: "tenant_owner" });
   const [auditLogs, setAuditLogs] = useState([]);
+  const [brandUploadNames, setBrandUploadNames] = useState({});
 
   async function api(path, options = {}) {
     const headers = {
@@ -737,6 +784,11 @@ function App() {
     }
   }
   async function loadBackups() {
+    if (adminUser?.role !== "super_admin") {
+      setBackups([]);
+      setBackupStatus("");
+      return;
+    }
     try {
       const data = await api("/admin/backups");
       setBackups(Array.isArray(data?.files) ? data.files : []);
@@ -746,7 +798,10 @@ function App() {
   }
 
   async function createBackup(source) {
-    const label = source === "supabase" ? "Supabase السحابي" : "المحلي";
+    if (adminUser?.role !== "super_admin") {
+      return downloadTenantExport();
+    }
+    const label = "MySQL";
     if (!confirm(`سيتم إنشاء نسخة احتياطية من قاعدة البيانات ${label}. هل تريد المتابعة؟`)) return;
     setBackupLoading(source);
     setBackupStatus(`جاري إنشاء نسخة احتياطية من قاعدة البيانات ${label}...`);
@@ -757,6 +812,36 @@ function App() {
       downloadBackup(data.fileName);
     } catch (e) {
       setBackupStatus(`فشل إنشاء النسخة: ${e.message}`);
+    } finally {
+      setBackupLoading("");
+    }
+  }
+
+  async function downloadTenantExport() {
+    setBackupLoading("tenant-export");
+    setBackupStatus("جاري تجهيز تصدير بيانات الشركة...");
+    try {
+      const res = await fetch(`${API}/admin/exports/tenant-data`, {
+        headers: adminToken ? { Authorization: `Bearer ${adminToken}` } : {},
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => null);
+        throw new Error(data?.details || data?.error || "تعذر تصدير بيانات الشركة");
+      }
+      const blob = await res.blob();
+      const disposition = res.headers.get("content-disposition") || "";
+      const fileName = disposition.match(/filename="([^"]+)"/)?.[1] || `tenant-export-${new Date().toISOString().slice(0, 10)}.json`;
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = fileName;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+      setBackupStatus("تم تنزيل تصدير بيانات الشركة بنجاح.");
+    } catch (e) {
+      setBackupStatus(`تعذر تصدير بيانات الشركة: ${e.message}`);
     } finally {
       setBackupLoading("");
     }
@@ -891,22 +976,49 @@ function App() {
   }
 
 
-  async function uploadTenantBrandImage(file, targetField) {
+  async function uploadTenantBrandImage(file, targetField, target = "tenant-settings") {
     if (!file) return;
+    const isLogo = targetField === "logo_url";
+    const uploadKey = `${target}:${targetField}`;
+    const setPreview = (value) => {
+      if (target === "tenant-form") setTenantForm((prev) => ({ ...prev, [targetField]: value }));
+      else if (target === "selected-tenant") setSelectedTenant((prev) => ({ ...(prev || {}), [targetField]: value }));
+      else setTenantSettings((prev) => ({ ...(prev || {}), [targetField]: value }));
+    };
     try {
       const dataUrl = await fileToDataUrl(file);
-      const uploaded = await api("/admin/uploads/image", {
+      setBrandUploadNames((prev) => ({ ...prev, [uploadKey]: file.name }));
+      setPreview(dataUrl);
+
+      const endpoint =
+        target === "tenant-form"
+          ? "/admin/uploads/image"
+          : target === "selected-tenant" && selectedTenant?.id
+            ? `/super-admin/tenants/${selectedTenant.id}/${isLogo ? "logo" : "cover"}`
+            : `/admin/tenant/${isLogo ? "logo" : "cover"}`;
+      const uploaded = await api(endpoint, {
         method: "POST",
         body: JSON.stringify({
           image_data_url: dataUrl,
-          folder: targetField === "logo_url" ? "beauty-home-service/branding/logos" : "beauty-home-service/branding/covers",
+          folder: isLogo ? "beauty-home-service/branding/logos" : "beauty-home-service/branding/covers",
         }),
       });
-      setTenantSettings((prev) => ({ ...(prev || {}), [targetField]: uploaded.url }));
-      setMessage(targetField === "logo_url" ? "تم رفع شعار الشركة بنجاح." : "تم رفع خلفية الشركة بنجاح.");
+      const nextValue = uploaded.url || dataUrl;
+      if (target === "selected-tenant" && uploaded.tenant) setSelectedTenant((prev) => ({ ...(prev || {}), ...uploaded.tenant }));
+      else if (target === "tenant-settings" && uploaded.tenant) setTenantSettings((prev) => ({ ...(prev || {}), ...uploaded.tenant }));
+      else setPreview(nextValue);
+      setMessage(isLogo ? "تم رفع شعار الشركة بنجاح." : "تم رفع خلفية الشركة بنجاح.");
     } catch (e) {
       setMessage(`تعذر رفع الصورة: ${e.message}`);
     }
+  }
+
+  function removeTenantBrandImage(targetField, target = "tenant-settings") {
+    const uploadKey = `${target}:${targetField}`;
+    setBrandUploadNames((prev) => ({ ...prev, [uploadKey]: "" }));
+    if (target === "tenant-form") setTenantForm((prev) => ({ ...prev, [targetField]: "" }));
+    else if (target === "selected-tenant") setSelectedTenant((prev) => ({ ...(prev || {}), [targetField]: "" }));
+    else setTenantSettings((prev) => ({ ...(prev || {}), [targetField]: "" }));
   }
 
   async function login(e) {
@@ -1074,7 +1186,7 @@ function App() {
   async function createBooking(e) {
     e.preventDefault();
     try {
-      await api("/bookings", {
+      await api("/admin/bookings", {
         method: "POST",
         body: JSON.stringify(clean(bookingForm)),
       });
@@ -1655,6 +1767,8 @@ function App() {
             createBackup={createBackup}
             loadBackups={loadBackups}
             downloadBackup={downloadBackup}
+            downloadTenantExport={downloadTenantExport}
+            adminUser={adminUser}
           />
         )}
 
@@ -1672,34 +1786,29 @@ function App() {
                 <Field label="اسم الشركة"><TextInput value={tenantSettings.business_name || ""} onChange={(v)=>setTenantSettings({...tenantSettings,business_name:v})} /></Field>
                 <Field label="Slug / رابط الشركة"><TextInput value={tenantSettings.slug || ""} disabled /></Field>
                 <Field label="شعار الشركة">
-                  <div className="brand-upload-control">
-                    <div className="brand-preview logo-preview">
-                      {tenantSettings.logo_url ? <img src={tenantSettings.logo_url} alt="شعار الشركة" /> : <Sparkles size={26} />}
-                    </div>
-                    <div className="brand-upload-body">
-                      <TextInput value={tenantSettings.logo_url || ""} onChange={(v)=>setTenantSettings({...tenantSettings,logo_url:v})} placeholder="سيظهر الرابط هنا بعد الرفع أو يمكن لصق رابط مباشر" />
-                      <label className="file-browse-btn">
-                        <Upload size={16}/> استعراض ورفع الشعار
-                        <input type="file" accept="image/*" onChange={(e)=>uploadTenantBrandImage(e.target.files?.[0], "logo_url")} />
-                      </label>
-                      <small>يفضل شعار PNG بخلفية شفافة أو صورة مربعة واضحة.</small>
-                    </div>
-                  </div>
+                  <BrandImageUpload
+                    value={tenantSettings.logo_url}
+                    onChange={(v)=>setTenantSettings({...tenantSettings,logo_url:v})}
+                    onUpload={(file)=>uploadTenantBrandImage(file, "logo_url", "tenant-settings")}
+                    onRemove={()=>removeTenantBrandImage("logo_url", "tenant-settings")}
+                    fileName={brandUploadNames["tenant-settings:logo_url"]}
+                    uploadLabel="استعراض ورفع الشعار"
+                    placeholder="سيظهر الرابط هنا بعد الرفع أو يمكن لصق رابط مباشر"
+                    help="يفضل شعار PNG بخلفية شفافة أو صورة مربعة واضحة."
+                  />
                 </Field>
                 <Field label="خلفية صفحة الحجز">
-                  <div className="brand-upload-control">
-                    <div className="brand-preview cover-preview">
-                      {tenantSettings.cover_image_url ? <img src={tenantSettings.cover_image_url} alt="خلفية الشركة" /> : <Images size={26} />}
-                    </div>
-                    <div className="brand-upload-body">
-                      <TextInput value={tenantSettings.cover_image_url || ""} onChange={(v)=>setTenantSettings({...tenantSettings,cover_image_url:v})} placeholder="سيظهر الرابط هنا بعد الرفع أو يمكن لصق رابط مباشر" />
-                      <label className="file-browse-btn">
-                        <Upload size={16}/> استعراض ورفع الخلفية
-                        <input type="file" accept="image/*" onChange={(e)=>uploadTenantBrandImage(e.target.files?.[0], "cover_image_url")} />
-                      </label>
-                      <small>يفضل صورة أفقية ناعمة تناسب صفحة الحجز العامة.</small>
-                    </div>
-                  </div>
+                  <BrandImageUpload
+                    value={tenantSettings.cover_image_url}
+                    onChange={(v)=>setTenantSettings({...tenantSettings,cover_image_url:v})}
+                    onUpload={(file)=>uploadTenantBrandImage(file, "cover_image_url", "tenant-settings")}
+                    onRemove={()=>removeTenantBrandImage("cover_image_url", "tenant-settings")}
+                    fileName={brandUploadNames["tenant-settings:cover_image_url"]}
+                    variant="cover"
+                    uploadLabel="استعراض ورفع الخلفية"
+                    placeholder="سيظهر الرابط هنا بعد الرفع أو يمكن لصق رابط مباشر"
+                    help="يفضل صورة أفقية ناعمة تناسب صفحة الحجز العامة."
+                  />
                 </Field>
                 <Field label="الشعار النصي"><TextInput value={tenantSettings.tagline_ar || ""} onChange={(v)=>setTenantSettings({...tenantSettings,tagline_ar:v})} /></Field>
                 <Field label="وصف الشركة"><TextArea value={tenantSettings.description_ar || ""} onChange={(v)=>setTenantSettings({...tenantSettings,description_ar:v})} /></Field>
@@ -1742,8 +1851,31 @@ function App() {
                   <Field label="بريد مدير الشركة"><TextInput value={tenantForm.owner_email} onChange={(v)=>setTenantForm({...tenantForm,owner_email:v})} required /></Field>
                   <Field label="كلمة مرور المدير"><TextInput type="password" value={tenantForm.owner_password} onChange={(v)=>setTenantForm({...tenantForm,owner_password:v})} required /></Field>
                   <Field label="جوال الشركة"><TextInput value={tenantForm.contact_phone} onChange={(v)=>setTenantForm({...tenantForm,contact_phone:v})} /></Field>
-                  <Field label="رابط الشعار"><TextInput value={tenantForm.logo_url} onChange={(v)=>setTenantForm({...tenantForm,logo_url:v})} /></Field>
-                  <Field label="رابط صورة الغلاف"><TextInput value={tenantForm.cover_image_url} onChange={(v)=>setTenantForm({...tenantForm,cover_image_url:v})} /></Field>
+                  <Field label="شعار الشركة">
+                    <BrandImageUpload
+                      value={tenantForm.logo_url}
+                      onChange={(v)=>setTenantForm({...tenantForm,logo_url:v})}
+                      onUpload={(file)=>uploadTenantBrandImage(file, "logo_url", "tenant-form")}
+                      onRemove={()=>removeTenantBrandImage("logo_url", "tenant-form")}
+                      fileName={brandUploadNames["tenant-form:logo_url"]}
+                      uploadLabel="استعراض ورفع الشعار"
+                      placeholder="اختاري ملفاً أو الصقي رابط شعار مباشر"
+                      help="يظهر هذا الشعار في رأس تطبيق العميلة ولوحة الشركة."
+                    />
+                  </Field>
+                  <Field label="صورة الغلاف">
+                    <BrandImageUpload
+                      value={tenantForm.cover_image_url}
+                      onChange={(v)=>setTenantForm({...tenantForm,cover_image_url:v})}
+                      onUpload={(file)=>uploadTenantBrandImage(file, "cover_image_url", "tenant-form")}
+                      onRemove={()=>removeTenantBrandImage("cover_image_url", "tenant-form")}
+                      fileName={brandUploadNames["tenant-form:cover_image_url"]}
+                      variant="cover"
+                      uploadLabel="استعراض ورفع الغلاف"
+                      placeholder="اختاري ملفاً أو الصقي رابط صورة غلاف"
+                      help="يفضل صورة أفقية فاخرة تظهر في واجهة الحجز العامة."
+                    />
+                  </Field>
                   <Field label="الشعار النصي"><TextInput value={tenantForm.tagline_ar} onChange={(v)=>setTenantForm({...tenantForm,tagline_ar:v})} /></Field>
                   <Field label="لون رئيسي"><TextInput type="color" value={tenantForm.primary_color} onChange={(v)=>setTenantForm({...tenantForm,primary_color:v})} /></Field>
                   <Field label="لون مساعد"><TextInput type="color" value={tenantForm.accent_color} onChange={(v)=>setTenantForm({...tenantForm,accent_color:v})} /></Field>
@@ -1772,8 +1904,31 @@ function App() {
                     <form className="form-grid compact-form" onSubmit={saveSelectedTenant}>
                       <Field label="اسم الشركة"><TextInput value={selectedTenant.business_name || ""} onChange={(v)=>setSelectedTenant({...selectedTenant,business_name:v})} /></Field>
                       <Field label="Slug"><TextInput value={selectedTenant.slug || ""} disabled /></Field>
-                      <Field label="رابط الشعار"><TextInput value={selectedTenant.logo_url || ""} onChange={(v)=>setSelectedTenant({...selectedTenant,logo_url:v})} /></Field>
-                      <Field label="رابط الغلاف"><TextInput value={selectedTenant.cover_image_url || ""} onChange={(v)=>setSelectedTenant({...selectedTenant,cover_image_url:v})} /></Field>
+                      <Field label="شعار الشركة">
+                        <BrandImageUpload
+                          value={selectedTenant.logo_url || ""}
+                          onChange={(v)=>setSelectedTenant({...selectedTenant,logo_url:v})}
+                          onUpload={(file)=>uploadTenantBrandImage(file, "logo_url", "selected-tenant")}
+                          onRemove={()=>removeTenantBrandImage("logo_url", "selected-tenant")}
+                          fileName={brandUploadNames["selected-tenant:logo_url"]}
+                          uploadLabel="استعراض ورفع الشعار"
+                          placeholder="اختاري ملفاً أو الصقي رابط شعار مباشر"
+                          help="يتم حفظ الرفع مباشرة على هذه الشركة، ويمكنك أيضاً حفظ باقي الإعدادات بعد التعديل."
+                        />
+                      </Field>
+                      <Field label="صورة الغلاف">
+                        <BrandImageUpload
+                          value={selectedTenant.cover_image_url || ""}
+                          onChange={(v)=>setSelectedTenant({...selectedTenant,cover_image_url:v})}
+                          onUpload={(file)=>uploadTenantBrandImage(file, "cover_image_url", "selected-tenant")}
+                          onRemove={()=>removeTenantBrandImage("cover_image_url", "selected-tenant")}
+                          fileName={brandUploadNames["selected-tenant:cover_image_url"]}
+                          variant="cover"
+                          uploadLabel="استعراض ورفع الغلاف"
+                          placeholder="اختاري ملفاً أو الصقي رابط صورة غلاف"
+                          help="تظهر صورة الغلاف في صفحة الحجز العامة الخاصة بهذه الشركة."
+                        />
+                      </Field>
                       <Field label="الشعار النصي"><TextInput value={selectedTenant.tagline_ar || ""} onChange={(v)=>setSelectedTenant({...selectedTenant,tagline_ar:v})} /></Field>
                       <Field label="وصف الشركة"><TextArea value={selectedTenant.description_ar || ""} onChange={(v)=>setSelectedTenant({...selectedTenant,description_ar:v})} /></Field>
                       <Field label="واتساب"><TextInput value={selectedTenant.whatsapp_number || ""} onChange={(v)=>setSelectedTenant({...selectedTenant,whatsapp_number:v})} /></Field>
@@ -3538,32 +3693,37 @@ function formatBytes(bytes) {
   return `${(n / (1024 * 1024)).toFixed(2)} MB`;
 }
 
-function BackupPanel({ backups, backupStatus, backupLoading, createBackup, loadBackups, downloadBackup }) {
+function BackupPanel({ backups, backupStatus, backupLoading, createBackup, loadBackups, downloadBackup, downloadTenantExport, adminUser }) {
   const list = Array.isArray(backups) ? backups : [];
+  const isSuperAdmin = adminUser?.role === "super_admin";
   return (
     <section className="panel backup-panel">
-      <h2>النسخ الاحتياطي لقاعدة البيانات</h2>
+      <h2>النسخ والتصدير</h2>
       <p className="muted">
-        إنشاء نسخة SQL من قاعدة البيانات المحلية أو قاعدة Supabase السحابية وحفظها في مجلد backups على السيرفر مع تحميلها على الجهاز.
+        صدري بيانات شركتك فقط بصيغة JSON. النسخة الكاملة لقاعدة البيانات متاحة للـ Super Admin فقط.
       </p>
       <div className="backup-actions">
-        <button disabled={!!backupLoading} onClick={() => createBackup("local")}>
-          <HardDrive size={18} />
-          {backupLoading === "local" ? "جاري النسخ..." : "نسخة احتياطية من المحلي"}
+        <button disabled={!!backupLoading} onClick={downloadTenantExport}>
+          <Download size={18} />
+          {backupLoading === "tenant-export" ? "جاري التصدير..." : "تصدير بيانات الشركة"}
         </button>
-        <button disabled={!!backupLoading} onClick={() => createBackup("supabase")}>
-          <Cloud size={18} />
-          {backupLoading === "supabase" ? "جاري النسخ..." : "نسخة احتياطية من Supabase"}
-        </button>
-        <button className="secondary" disabled={!!backupLoading} onClick={loadBackups}>
-          <RefreshCw size={18} /> تحديث القائمة
-        </button>
+        {isSuperAdmin && (
+          <>
+            <button className="secondary" disabled={!!backupLoading} onClick={() => createBackup("local")}>
+              <HardDrive size={18} />
+              {backupLoading === "local" ? "جاري النسخ..." : "نسخة SQL كاملة"}
+            </button>
+            <button className="secondary" disabled={!!backupLoading} onClick={loadBackups}>
+              <RefreshCw size={18} /> تحديث القائمة
+            </button>
+          </>
+        )}
       </div>
       {backupStatus && <div className="message">{backupStatus}</div>}
       <div className="backup-note">
-        <b>مهم:</b> بيانات الاتصال وكلمات المرور يجب أن تكون داخل ملف backend/.env فقط، ولا يتم وضعها داخل واجهة React.
+        <b>مهم:</b> تصدير الشركة لا يحتوي على بيانات شركات أخرى ولا يتضمن كلمات مرور أو أسرار النظام.
       </div>
-      <div className="tableWrap">
+      {isSuperAdmin && <div className="tableWrap">
         <table>
           <thead>
             <tr>
@@ -3580,7 +3740,7 @@ function BackupPanel({ backups, backupStatus, backupLoading, createBackup, loadB
             )}
             {list.map((file) => (
               <tr key={file.file_name}>
-                <td>{file.source === "supabase" ? "Supabase" : "محلي"}</td>
+                <td>MySQL</td>
                 <td dir="ltr">{file.file_name}</td>
                 <td>{formatBytes(file.size_bytes)}</td>
                 <td>{formatDate(file.created_at)}</td>
@@ -3593,7 +3753,7 @@ function BackupPanel({ backups, backupStatus, backupLoading, createBackup, loadB
             ))}
           </tbody>
         </table>
-      </div>
+      </div>}
     </section>
   );
 }
